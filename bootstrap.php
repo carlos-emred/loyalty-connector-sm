@@ -207,6 +207,9 @@ Config::verificarObligatorias([
     'SALESMANAGO_API_KEY',
     'SALESMANAGO_SHA',
     'SALESMANAGO_OWNER',
+    'VOUCHERIFY_API',
+    'VOUCHERIFY_APP_ID',
+    'VOUCHERIFY_SECRET_KEY',
 ]);
 
 // -----------------------------------------------------------------------------

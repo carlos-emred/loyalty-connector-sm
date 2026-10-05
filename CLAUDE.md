@@ -10,7 +10,7 @@ Por ahora solo hay dos flujos:
 
 | Fichero | Qué hace |
 |---|---|
-| `public/registro_club.php` | Síncrono. Recibe el formulario del storefront, guarda al usuario en `sm_clientes` y hace upsert del contacto en SalesManago |
+| `public/registro_club.php` | Síncrono. Recibe el formulario del storefront, guarda al usuario en `sm_clientes`, hace upsert del cliente en Voucherify (`source_id` = DNI) y después del contacto en SalesManago con su `voucherifyId` |
 | `public/webhooks/completar_usuario.php` | Webhook `customer.created` de Voucherify. Encola en `sm_eventos_pendientes`; el worker (`ManejadorAltaCliente`) guarda el `cust_...` en `sm_clientes` y lo añade al contacto como propiedad `voucherifyId` |
 
 ## Convivencia con el conector de Blueshift

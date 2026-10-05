@@ -3,19 +3,30 @@
 declare(strict_types=1);
 
 /**
- * Registro de un usuario en el club de fidelización, contra SalesManago.
+ * Registro de un usuario en el club de fidelización, contra Voucherify y
+ * SalesManago.
  *
- * Recibe los datos del formulario del storefront, los guarda en sm_clientes y
- * crea o actualiza el contacto en SalesManago. No busca perfiles previos ni
- * distingue registro de login: el upsert de SalesManago ya resuelve el caso
- * de un contacto existente.
+ * Recibe los datos del formulario del storefront, los guarda en sm_clientes,
+ * crea o actualiza el cliente en Voucherify y después el contacto en
+ * SalesManago. No busca perfiles previos ni distingue registro de login: los
+ * dos upserts ya resuelven el caso de un usuario existente.
  *
  * ORDEN
  * -----
- * Primero la base, después SalesManago. Si SalesManago falla, la fila queda
- * con sincronizado_en a NULL y el usuario recibe un error; al reintentar el
- * registro se vuelve a enviar. Al revés, un fallo de la base dejaría un
- * contacto en SalesManago sin rastro local.
+ * 1. La base. Un fallo posterior deja rastro local de lo que se intentó.
+ * 2. Voucherify. Su upsert por source_id es idempotente: si falla aquí, el
+ *    usuario recibe un error y al reintentar no se duplica nada.
+ * 3. SalesManago, ya con el voucherifyId en las propiedades. Va el último
+ *    porque su upsert puede enviar el correo de doble opt-in: si fuese antes
+ *    y fallase Voucherify, el reintento del usuario lo enviaría otra vez.
+ *
+ * Si SalesManago falla, la fila queda con sincronizado_en a NULL y el usuario
+ * recibe un error; al reintentar el registro se vuelve a enviar todo.
+ *
+ * El alta en Voucherify dispara customer.created hacia completar_usuario.php,
+ * que repite el voucherifyId en SalesManago. Es redundante pero inocuo: fija
+ * el mismo valor. Se mantiene porque cubre los clientes que Voucherify crea
+ * por otras vías.
  *
  * DIFERENCIAS CON EL SCRIPT ORIGINAL (v2/registro_club.php)
  * ---------------------------------------------------------
@@ -29,6 +40,9 @@ declare(strict_types=1);
  *   hoy el formulario.
  * - Los indicadores de consentimiento (forceOptIn, forceOptOut...) se envían
  *   exactamente como en el original. Ver la nota en registrarEnSalesManago().
+ * - El alta en Voucherify del borrador v2 usaba el correo como source_id. Aquí
+ *   va el DNI, que es el convenio de los dos conectores (ver
+ *   registrarEnVoucherify()).
  *
  * ENTRADA
  * -------
@@ -55,6 +69,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../bootstrap.php';
 
 use SalesManago\ApiSalesManago;
+use SalesManago\ApiVoucherify;
 use SalesManago\Auth;
 use SalesManago\Cors;
 use SalesManago\Db;
@@ -93,7 +108,26 @@ if ($cumpleanos !== '' && $fechaNacimiento === null) {
 $idFila = guardarEnBbdd($email, $dni, $nombre, $apellido, $telefono, $genero, $fechaNacimiento);
 
 try {
-    $contactId = registrarEnSalesManago($email, $dni, $nombre, $apellido, $telefono, $genero, $fechaNacimiento);
+    $voucherifyId = registrarEnVoucherify($email, $dni, $nombre, $apellido, $telefono, $genero, $fechaNacimiento);
+} catch (Throwable $e) {
+    Log::error('Registro: Voucherify no confirmó el alta', [
+        'fila'    => $idFila,
+        'mensaje' => $e->getMessage(),
+    ]);
+
+    responder(502, false, 'No se pudo completar el registro');
+}
+
+Db::ejecutar(
+    'UPDATE sm_clientes
+        SET voucherify_id = :voucherify,
+            actualizado_en = now()
+      WHERE id = :id',
+    ['voucherify' => $voucherifyId, 'id' => $idFila]
+);
+
+try {
+    $contactId = registrarEnSalesManago($email, $dni, $nombre, $apellido, $telefono, $genero, $voucherifyId, $fechaNacimiento);
 } catch (Throwable $e) {
     Log::error('Registro: SalesManago no confirmó el alta', [
         'fila'    => $idFila,
@@ -112,7 +146,7 @@ Db::ejecutar(
     ['contacto' => $contactId, 'id' => $idFila]
 );
 
-Log::info('Usuario registrado en el club', ['fila' => $idFila]);
+Log::info('Usuario registrado en el club', ['fila' => $idFila, 'customer' => $voucherifyId]);
 
 responder(200, true, 'Registro correcto');
 
@@ -123,8 +157,8 @@ responder(200, true, 'Registro correcto');
  *
  * Un segundo registro con el mismo correo actualiza los datos en lugar de
  * fallar: es el mismo usuario corrigiendo el formulario. Los opcionales que
- * llegan vacíos no borran los que ya se conocían. voucherify_id no se toca:
- * lo escribe completar_usuario.php.
+ * llegan vacíos no borran los que ya se conocían. voucherify_id no se toca
+ * aquí: se escribe cuando Voucherify confirma el alta.
  */
 function guardarEnBbdd(
     string $email,
@@ -163,10 +197,53 @@ function guardarEnBbdd(
 }
 
 /**
+ * Crea o actualiza el cliente en Voucherify y devuelve su id (cust_...).
+ *
+ * SOURCE_ID
+ * ---------
+ * Va el DNI, no el correo como en el borrador v2: es el convenio de los
+ * conectores (ManejadorAltaCliente busca por DNI cuando el cliente no trae
+ * correo, y el de Blueshift publica el source_id como «dni»). Con el correo,
+ * un usuario dado de alta por otra vía con su DNI quedaría duplicado.
+ *
+ * Los nombres de «metadata» (last_name, genero, dni) son los del borrador.
+ * Los opcionales vacíos no se envían, para no vaciar los que ya tenga el
+ * cliente.
+ *
+ * @throws RuntimeException si Voucherify no confirma
+ */
+function registrarEnVoucherify(
+    string $email,
+    string $dni,
+    string $nombre,
+    string $apellido,
+    string $telefono,
+    string $genero,
+    ?DateTimeImmutable $fechaNacimiento,
+): string {
+    $datos = [
+        'source_id' => $dni,
+        'email'     => $email,
+        'phone'     => $telefono,
+        'name'      => $nombre,
+        'metadata'  => array_filter(
+            ['last_name' => $apellido, 'genero' => $genero, 'dni' => $dni],
+            static fn (string $valor): bool => $valor !== ''
+        ),
+    ];
+
+    if ($fechaNacimiento !== null) {
+        $datos['birthdate'] = $fechaNacimiento->format('Y-m-d');
+    }
+
+    return ApiVoucherify::upsertCliente($datos);
+}
+
+/**
  * Envía el contacto a SalesManago y devuelve su contactId.
  *
- * Los nombres de «properties» (genero, dni) son los del script original: las
- * segmentaciones de SalesManago se apoyan en ellos.
+ * Los nombres de «properties» (genero, dni, voucherifyId) son los de los
+ * scripts originales: las segmentaciones de SalesManago se apoyan en ellos.
  *
  * CONSENTIMIENTOS
  * ---------------
@@ -189,6 +266,7 @@ function registrarEnSalesManago(
     string $apellido,
     string $telefono,
     string $genero,
+    string $voucherifyId,
     ?DateTimeImmutable $fechaNacimiento,
 ): ?string {
     $datos = [
@@ -200,7 +278,7 @@ function registrarEnSalesManago(
         // Sin género no se envía la propiedad, para no vaciar la que ya tenga
         // el contacto.
         'properties' => array_filter(
-            ['genero' => $genero, 'dni' => $dni],
+            ['genero' => $genero, 'dni' => $dni, 'voucherifyId' => $voucherifyId],
             static fn (string $valor): bool => $valor !== ''
         ),
         'forceOptIn'          => true,
