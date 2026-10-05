@@ -1,0 +1,37 @@
+[Unit]
+Description=SalesManago worker: drena la cola de eventos de Voucherify del conector de SalesManago
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=salesmanago
+Group=salesmanago
+WorkingDirectory=/opt/salesmanago/repo
+
+# Sin EnvironmentFile, como en loyalty-worker: Config.php lee el .env.
+ExecStart=/usr/bin/php /opt/salesmanago/repo/worker/run.php
+
+# El worker sale solo tras un número de ciclos o al superar el límite de
+# memoria, y systemd lo vuelve a levantar.
+Restart=always
+RestartSec=5
+
+# Margen para que termine el lote en curso al recibir SIGTERM.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+StandardOutput=append:/var/log/salesmanago/worker.log
+StandardError=append:/var/log/salesmanago/worker.log
+SyslogIdentifier=salesmanago-worker
+
+MemoryMax=256M
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/salesmanago
+
+[Install]
+WantedBy=multi-user.target
