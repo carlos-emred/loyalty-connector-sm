@@ -8,8 +8,24 @@ declare(strict_types=1);
  *
  * Recibe los datos del formulario del storefront, los guarda en sm_clientes,
  * crea o actualiza el cliente en Voucherify y después el contacto en
- * SalesManago. No busca perfiles previos ni distingue registro de login: los
- * dos upserts ya resuelven el caso de un usuario existente.
+ * SalesManago.
+ *
+ * USUARIO YA REGISTRADO
+ * ---------------------
+ * Si en sm_clientes ya hay un registro completado con ese correo, se responde
+ * 409 sin llamar a Voucherify ni a SalesManago. «Completado» es que
+ * SalesManago confirmó el alta (sincronizado_en no es NULL).
+ *
+ * Una fila con sincronizado_en a NULL es un registro que falló a medias: no
+ * bloquea, y el nuevo intento la sobrescribe. Si bloqueara, un fallo puntual
+ * de Voucherify o SalesManago dejaría al usuario sin poder registrarse nunca.
+ *
+ * La comprobación va en el mismo INSERT ... ON CONFLICT que guarda la fila, no
+ * en un SELECT previo: dos envíos simultáneos del mismo formulario no pueden
+ * colarse los dos entre la consulta y la escritura.
+ *
+ * El 409 revela que ese correo está registrado. Es lo que se pide, pero
+ * permite a cualquiera averiguar si un correo es socio del club.
  *
  * ORDEN
  * -----
@@ -54,9 +70,9 @@ declare(strict_types=1);
  * lo que pase de 72 bytes, y aceptarlo daría por buena cualquier contraseña
  * que compartiese ese prefijo.
  *
- * Un segundo registro con el mismo correo no cambia la contraseña ya
- * guardada: si lo hiciera, cualquiera que conociese el correo de un socio
- * podría sustituírsela. Cambiarla es tarea de un flujo propio, con el usuario
+ * Un registro completado nunca se sobrescribe (ver USUARIO YA REGISTRADO), así
+ * que nadie puede sustituir la contraseña de un socio volviendo a registrarse
+ * con su correo. Cambiarla es tarea de un flujo propio, con el usuario
  * identificado.
  *
  * ENTRADA
@@ -82,6 +98,7 @@ declare(strict_types=1);
  *   400 {"success": false, "message": "Datos necesarios incompletos"}
  *   400 {"success": false, "message": "Las contraseñas no coinciden"}
  *   400 {"success": false, "message": "La contraseña debe tener entre 8 y 72 caracteres"}
+ *   409 {"success": false, "message": "Ya existe un usuario registrado con ese correo"}
  *   502 {"success": false, "message": "No se pudo completar el registro"}
  */
 
@@ -153,6 +170,12 @@ if ($cumpleanos !== '' && $fechaNacimiento === null) {
 
 $idFila = guardarEnBbdd($email, $dni, $nombre, $apellido, $telefono, $genero, $fechaNacimiento, $passwordHash);
 
+if ($idFila === null) {
+    Log::info('Registro rechazado: el correo ya tiene un registro completado');
+
+    responder(409, false, 'Ya existe un usuario registrado con ese correo');
+}
+
 try {
     $voucherifyId = registrarEnVoucherify($email, $dni, $nombre, $apellido, $telefono, $genero, $fechaNacimiento);
 } catch (Throwable $e) {
@@ -199,15 +222,17 @@ responder(200, true, 'Registro correcto');
 // -----------------------------------------------------------------------------
 
 /**
- * Crea o actualiza la fila del usuario y devuelve su id.
+ * Crea la fila del usuario y devuelve su id, o null si el correo ya tiene un
+ * registro completado.
  *
- * Un segundo registro con el mismo correo actualiza los datos en lugar de
- * fallar: es el mismo usuario corrigiendo el formulario. Los opcionales que
- * llegan vacíos no borran los que ya se conocían. voucherify_id no se toca
- * aquí: se escribe cuando Voucherify confirma el alta.
+ * Si existe una fila con ese correo pero sin completar (sincronizado_en a
+ * NULL), se sobrescribe con los datos nuevos, contraseña incluida: es el mismo
+ * usuario reintentando tras un fallo. Los opcionales que llegan vacíos no
+ * borran los que ya se conocían. voucherify_id no se toca aquí: se escribe
+ * cuando Voucherify confirma el alta.
  *
- * password_hash solo se escribe si la fila no tenía uno: un nuevo registro con
- * el mismo correo no sustituye la contraseña (ver CONTRASEÑA, arriba).
+ * Con un registro completado, la cláusula WHERE del ON CONFLICT descarta la
+ * actualización, RETURNING no devuelve fila y Db::valor() da null.
  */
 function guardarEnBbdd(
     string $email,
@@ -218,8 +243,8 @@ function guardarEnBbdd(
     string $genero,
     ?DateTimeImmutable $fechaNacimiento,
     string $passwordHash,
-): int {
-    return (int) Db::valor(
+): ?int {
+    $id = Db::valor(
         'INSERT INTO sm_clientes
                 (cliente, email, dni, nombre, apellido, telefono, genero, fecha_nacimiento, password_hash, registrado_en)
          VALUES (:cli, :email, :dni, :nombre, :apellido, :telefono, :genero, :fecha, :hash, now())
@@ -230,9 +255,10 @@ function guardarEnBbdd(
                 telefono = EXCLUDED.telefono,
                 genero = COALESCE(EXCLUDED.genero, sm_clientes.genero),
                 fecha_nacimiento = COALESCE(EXCLUDED.fecha_nacimiento, sm_clientes.fecha_nacimiento),
-                password_hash = COALESCE(sm_clientes.password_hash, EXCLUDED.password_hash),
+                password_hash = EXCLUDED.password_hash,
                 registrado_en = now(),
                 actualizado_en = now()
+          WHERE sm_clientes.sincronizado_en IS NULL
          RETURNING id',
         [
             'cli'      => Db::cliente(),
@@ -246,6 +272,8 @@ function guardarEnBbdd(
             'hash'     => $passwordHash,
         ]
     );
+
+    return $id === null ? null : (int) $id;
 }
 
 /**

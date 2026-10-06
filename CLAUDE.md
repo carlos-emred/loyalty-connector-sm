@@ -10,7 +10,7 @@ Por ahora solo hay un flujo:
 
 | Fichero | Qué hace |
 |---|---|
-| `public/registro_club.php` | Síncrono. Recibe el formulario del storefront, valida la contraseña, guarda al usuario en `sm_clientes` (contraseña solo como hash en `password_hash`), hace upsert del cliente en Voucherify (`source_id` = DNI) y después del contacto en SalesManago con su `voucherifyId` |
+| `public/registro_club.php` | Síncrono. Recibe el formulario del storefront, valida la contraseña, responde 409 si el correo ya tiene un registro completado (`sincronizado_en` no nulo), guarda al usuario en `sm_clientes` (contraseña solo como hash en `password_hash`), hace upsert del cliente en Voucherify (`source_id` = DNI) y después del contacto en SalesManago con su `voucherifyId` |
 
 El id de Voucherify (`cust_...`) sale de la respuesta del alta en `registro_club.php`. Por eso no hay webhook `customer.created`: el antiguo `completar_usuario.php` se retiró. La cola (`sm_eventos_pendientes`) y el worker siguen en el repositorio como parte del esqueleto común, pero hoy no tienen ningún manejador registrado.
 
