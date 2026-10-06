@@ -53,6 +53,10 @@ CREATE TABLE IF NOT EXISTS sm_clientes (
     password_hash           text,
     voucherify_id           text,
     salesmanago_contact_id  text,
+    loyalty_card            text,
+    tier                    text,
+    saldo_puntos            integer,
+    total_puntos            integer,
     registrado_en           timestamptz,
     sincronizado_en         timestamptz,
     creado_en               timestamptz NOT NULL DEFAULT now(),
@@ -67,7 +71,11 @@ COMMENT ON COLUMN sm_clientes.email IS 'Siempre en minúsculas; identifica el co
 COMMENT ON COLUMN sm_clientes.password_hash IS 'Hash de password_hash() de PHP; nunca la contraseña en claro';
 COMMENT ON COLUMN sm_clientes.voucherify_id IS 'Identificador de Voucherify (cust_...); lo devuelve el alta en registro_club.php';
 COMMENT ON COLUMN sm_clientes.salesmanago_contact_id IS 'contactId devuelto por SalesManago en el último upsert';
-COMMENT ON COLUMN sm_clientes.registrado_en IS 'Último paso por registro_club.php; NULL si solo llegó el alta de Voucherify';
+COMMENT ON COLUMN sm_clientes.loyalty_card IS 'Código de la tarjeta de fidelización de Voucherify; llega con voucher.published (LOYALTY_CARD)';
+COMMENT ON COLUMN sm_clientes.tier IS 'Nivel del socio en el programa de fidelización';
+COMMENT ON COLUMN sm_clientes.saldo_puntos IS 'Puntos disponibles para canjear; NULL si aún no se conoce';
+COMMENT ON COLUMN sm_clientes.total_puntos IS 'Puntos acumulados desde el alta; NULL si aún no se conoce';
+COMMENT ON COLUMN sm_clientes.registrado_en IS 'Último paso por registro_club.php; NULL si la fila la creó un webhook de Voucherify';
 COMMENT ON COLUMN sm_clientes.sincronizado_en IS 'Último upsert confirmado por SalesManago; NULL si nunca se confirmó';
 
 CREATE INDEX IF NOT EXISTS ix_sm_clientes_dni

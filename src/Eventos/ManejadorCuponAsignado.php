@@ -7,6 +7,7 @@ namespace SalesManago\Eventos;
 use SalesManago\ApiSalesManago;
 use SalesManago\Db;
 use SalesManago\Log;
+use RuntimeException;
 
 /**
  * Atiende voucher.published: Voucherify ha asignado un cupón a un cliente.
@@ -33,8 +34,10 @@ use SalesManago\Log;
  * TARJETAS DE FIDELIZACIÓN
  * ------------------------
  * voucher.published también llega cuando se asigna una LOYALTY_CARD. No es un
- * cupón: se registra en el log y se descarta. El original la enviaba a
+ * cupón: su código se guarda ÚNICAMENTE en sm_clientes.loyalty_card. No pasa
+ * por sm_cupones ni se avisa a SalesManago. El original la enviaba a
  * Blueshift con un identify, código heredado que en SalesManago no aplica.
+ * Ver guardarTarjeta().
  *
  * DIFERENCIAS CON EL SCRIPT ORIGINAL
  * ----------------------------------
@@ -79,9 +82,12 @@ final class ManejadorCuponAsignado implements ManejadorEvento
         }
 
         if (($voucher['type'] ?? null) === 'LOYALTY_CARD') {
-            Log::info('voucher.published de tarjeta de fidelización; no es un cupón, se ignora', [
-                'evento'  => $idEvento,
-                'voucher' => $voucherId,
+            $this->guardarTarjeta($cliente, $codigo, $customerId);
+
+            Log::info('Tarjeta de fidelización guardada en sm_clientes', [
+                'evento'   => $idEvento,
+                'voucher'  => $voucherId,
+                'customer' => $customerId,
             ]);
 
             return;
@@ -108,6 +114,66 @@ final class ManejadorCuponAsignado implements ManejadorEvento
             'customer' => $customerId,
             'tipo'     => $descuento['tipo'],
         ]);
+    }
+
+    /**
+     * Guarda el código de la tarjeta en sm_clientes.loyalty_card.
+     *
+     * Con correo en el payload, upsert por correo: si el cliente aún no tiene
+     * fila (no pasó por registro_club.php, o el webhook llega antes de que
+     * registro_club.php guarde su voucherify_id), se crea con lo mínimo. Esa
+     * fila tiene sincronizado_en a NULL, así que no impide que el socio se
+     * registre después; el registro la completa y conserva la tarjeta.
+     *
+     * Sin correo, solo se puede localizar al cliente por su id de Voucherify.
+     * Si todavía no hay fila con ese id, puede ser que registro_club.php no lo
+     * haya guardado aún: se lanza excepción para que el worker lo reintente
+     * más tarde.
+     *
+     * @param array<string,mixed> $cliente
+     *
+     * @throws RuntimeException si no hay fila a la que asignar la tarjeta
+     */
+    private function guardarTarjeta(array $cliente, string $codigo, string $customerId): void
+    {
+        $email = mb_strtolower(trim((string) ($cliente['email'] ?? '')));
+
+        if ($email !== '') {
+            Db::ejecutar(
+                'INSERT INTO sm_clientes (cliente, email, voucherify_id, loyalty_card)
+                 VALUES (:cli, :email, :customer, :tarjeta)
+                 ON CONFLICT (cliente, email) DO UPDATE
+                    SET loyalty_card = EXCLUDED.loyalty_card,
+                        voucherify_id = COALESCE(sm_clientes.voucherify_id, EXCLUDED.voucherify_id),
+                        actualizado_en = now()',
+                [
+                    'cli'      => Db::cliente(),
+                    'email'    => $email,
+                    'customer' => $customerId,
+                    'tarjeta'  => $codigo,
+                ]
+            );
+
+            return;
+        }
+
+        $filas = Db::ejecutar(
+            'UPDATE sm_clientes
+                SET loyalty_card = :tarjeta,
+                    actualizado_en = now()
+              WHERE cliente = :cli AND voucherify_id = :customer',
+            [
+                'cli'      => Db::cliente(),
+                'customer' => $customerId,
+                'tarjeta'  => $codigo,
+            ]
+        );
+
+        if ($filas === 0) {
+            throw new RuntimeException(
+                'Tarjeta de fidelización sin correo y sin cliente con ese id de Voucherify en sm_clientes; se reintentará'
+            );
+        }
     }
 
     /**

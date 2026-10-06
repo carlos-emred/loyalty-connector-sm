@@ -11,9 +11,9 @@ Por ahora hay dos flujos:
 | Fichero | Qué hace |
 |---|---|
 | `public/registro_club.php` | Síncrono. Recibe el formulario del storefront, valida la contraseña, responde 409 si el correo ya tiene un registro completado (`sincronizado_en` no nulo), guarda al usuario en `sm_clientes` (contraseña solo como hash en `password_hash`), hace upsert del cliente en Voucherify (`source_id` = DNI) y después del contacto en SalesManago con su `voucherifyId` |
-| `public/webhooks/anadir_cupon.php` | Webhook `voucher.published` de Voucherify (cupón asignado a un cliente). Encola en `sm_eventos_pendientes`; el worker (`ManejadorCuponAsignado`) guarda el cupón en `sm_cupones` y lanza un evento externo (`detail1` = `COMUNICAR_CUPON`) en el contacto de SalesManago, que dispara el correo. `notificado_en` impide enviarlo dos veces. Las tarjetas de fidelización (`LOYALTY_CARD`) se descartan |
+| `public/webhooks/anadir_cupon.php` | Webhook `voucher.published` de Voucherify (cupón asignado a un cliente). Encola en `sm_eventos_pendientes`; el worker (`ManejadorCuponAsignado`) guarda el cupón en `sm_cupones` y lanza un evento externo (`detail1` = `COMUNICAR_CUPON`) en el contacto de SalesManago, que dispara el correo. `notificado_en` impide enviarlo dos veces. Las tarjetas de fidelización (`LOYALTY_CARD`) solo se guardan en `sm_clientes.loyalty_card`: ni `sm_cupones` ni SalesManago |
 
-El id de Voucherify (`cust_...`) sale de la respuesta del alta en `registro_club.php`. Por eso no hay webhook `customer.created`: el antiguo `completar_usuario.php` se retiró.
+El id de Voucherify (`cust_...`) sale de la respuesta del alta en `registro_club.php`. Por eso no hay webhook `customer.created`: el antiguo `completar_usuario.php` se retiró. `sm_clientes` tiene también `tier`, `saldo_puntos` y `total_puntos`, que de momento ningún flujo rellena.
 
 ## Convivencia con el conector de Blueshift
 
