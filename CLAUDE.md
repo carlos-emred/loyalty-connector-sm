@@ -6,13 +6,14 @@ Contexto del proyecto. Léelo antes de tocar nada.
 
 Versión para **SalesManago** del conector de Blueshift (`/opt/loyalty/repo`). Mismo esqueleto (`bootstrap`, `Config`, `Http`, `Log`, `Auth`, `Cors`, `Db`, cola en PostgreSQL y worker), mismas reglas: **las de su `CLAUDE.md` se aplican aquí igual**, en especial timeouts en todas las llamadas (`Http::postJson`), nada sensible en `public/`, nada se borra de la base y logs sin credenciales ni datos personales.
 
-Por ahora solo hay un flujo:
+Por ahora hay dos flujos:
 
 | Fichero | Qué hace |
 |---|---|
 | `public/registro_club.php` | Síncrono. Recibe el formulario del storefront, valida la contraseña, responde 409 si el correo ya tiene un registro completado (`sincronizado_en` no nulo), guarda al usuario en `sm_clientes` (contraseña solo como hash en `password_hash`), hace upsert del cliente en Voucherify (`source_id` = DNI) y después del contacto en SalesManago con su `voucherifyId` |
+| `public/webhooks/anadir_cupon.php` | Webhook `voucher.published` de Voucherify (cupón asignado a un cliente). Encola en `sm_eventos_pendientes`; el worker (`ManejadorCuponAsignado`) guarda el cupón en `sm_cupones` y lanza un evento externo (`detail1` = `COMUNICAR_CUPON`) en el contacto de SalesManago, que dispara el correo. `notificado_en` impide enviarlo dos veces. Las tarjetas de fidelización (`LOYALTY_CARD`) se descartan |
 
-El id de Voucherify (`cust_...`) sale de la respuesta del alta en `registro_club.php`. Por eso no hay webhook `customer.created`: el antiguo `completar_usuario.php` se retiró. La cola (`sm_eventos_pendientes`) y el worker siguen en el repositorio como parte del esqueleto común, pero hoy no tienen ningún manejador registrado.
+El id de Voucherify (`cust_...`) sale de la respuesta del alta en `registro_club.php`. Por eso no hay webhook `customer.created`: el antiguo `completar_usuario.php` se retiró.
 
 ## Convivencia con el conector de Blueshift
 
@@ -26,7 +27,7 @@ Misma instancia EC2, **misma base** (`loyalty`) y mismo esquema (`loyalty`), mis
 | Pool PHP-FPM | `loyalty.sock` | `salesmanago.sock` |
 | Worker | `loyalty-worker` | `salesmanago-worker` |
 | Logs | `/var/log/loyalty/` | `/var/log/salesmanago/` |
-| Tablas | `clientes`, `eventos_pendientes`... | `sm_clientes`, `sm_eventos_pendientes` |
+| Tablas | `clientes`, `eventos_pendientes`... | `sm_clientes`, `sm_eventos_pendientes`, `sm_cupones` |
 | Espacio de nombres PHP | `Loyalty\` | `SalesManago\` |
 
 **Prefijo `sm_` obligatorio** en toda tabla, índice y restricción nuevos: en PostgreSQL los nombres de índice son únicos por esquema. Desde aquí no se lee ni se escribe ninguna tabla del conector de Blueshift.
@@ -39,6 +40,8 @@ La cola es propia a propósito: si los dos conectores reciben el mismo evento de
 - Responde 200 también cuando rechaza: se comprueba `success` (`ApiSalesManago::upsertContacto`).
 - `registro_club.php` no reintenta respuestas ambiguas: con `useApiDoubleOptIn` un segundo upsert podría enviar otra vez el correo de confirmación.
 - Los nombres de `properties` (`dni`, `genero`, `voucherifyId`) son los de los scripts originales y las segmentaciones dependen de ellos. No se renombran.
+- Las posiciones `detail1`..`detail10` del evento externo del cupón son las del script original (`v2/webhooks/añadir_cupon.php`) y la plantilla del correo se apoya en ellas. No se mueven. El código del cupón va en `detail11`, porque `value` es numérico en SalesManago.
+- El evento externo tampoco reintenta respuestas ambiguas: cada evento es un correo.
 
 ## Despliegue inicial
 
@@ -56,7 +59,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now salesmanago-worker
 sudo systemctl reload php-fpm nginx
 ```
 
-No hace falta ningún webhook en Voucherify para este conector. El del conector de Blueshift no se toca.
+En Voucherify, un webhook **nuevo** para `voucher.published` hacia `https://<dominio>/webhooks/anadir_cupon.php` con la cabecera `X-Loyalty-Key` y el `CONECTOR_SECRETO` de este `.env`. El webhook del conector de Blueshift no se toca.
 
 ## Pendiente de confirmar
 

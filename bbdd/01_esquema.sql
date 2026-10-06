@@ -81,8 +81,9 @@ CREATE INDEX IF NOT EXISTS ix_sm_clientes_voucherify
 -- sm_eventos_pendientes
 --
 -- La cola de webhooks de Voucherify, igual que eventos_pendientes del
--- conector de Blueshift pero separada: los dos reciben el mismo
--- customer.created, con el mismo event.id, y cada uno tiene que procesarlo.
+-- conector de Blueshift pero separada: los dos reciben los mismos eventos
+-- (voucher.published, por ejemplo), con el mismo event.id, y cada uno tiene
+-- que procesarlo.
 -- Con una sola tabla, el segundo en llegar chocaría con la restricción de
 -- unicidad y se daría por duplicado.
 -- ---------------------------------------------------------------------------
@@ -121,6 +122,72 @@ CREATE INDEX IF NOT EXISTS ix_sm_eventos_fallidos
 
 
 -- ---------------------------------------------------------------------------
+-- sm_cupones
+--
+-- Cupones asignados a cada cliente, uno por voucher.published. Sustituye al
+-- fichero cupones/{customer_id}.json de v2/webhooks/añadir_cupon.php.
+--
+-- customer_id es el id de Voucherify (cust_...), el mismo que guarda
+-- sm_clientes.voucherify_id. Sin clave ajena: el cupón puede llegar para un
+-- cliente que no pasó por registro_club.php.
+--
+-- notificado_en evita mandar dos veces el correo: se escribe justo después de
+-- lanzar el evento externo en SalesManago y se consulta antes.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS sm_cupones (
+    voucher_id              text        PRIMARY KEY,
+    cliente                 text        NOT NULL,
+    customer_id             text        NOT NULL,
+    codigo                  text        NOT NULL,
+    campaign_id             text,
+    campaign_name           text,
+
+    tipo                    text        NOT NULL,
+    valor                   integer,
+    producto                text,
+    importe_maximo          integer,
+
+    quantity                integer,
+    redeemed_quantity       integer     NOT NULL DEFAULT 0,
+
+    descripcion             text,
+    descripcion_corta       text,
+    image_url               text,
+    minimo_compra           integer,
+    solo_uno                text,
+    product_id              text,
+    category_id             text,
+    category_name           text,
+
+    fecha_inicio            timestamptz,
+    fecha_caducidad         timestamptz,
+    creado_voucherify_en    timestamptz,
+
+    metadata                jsonb,
+    notificado_en           timestamptz,
+    creado_en               timestamptz NOT NULL DEFAULT now(),
+    actualizado_en          timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT uq_sm_cupones_codigo UNIQUE (cliente, codigo),
+    CONSTRAINT ck_sm_cupones_tipo CHECK (tipo IN ('AMOUNT', 'PERCENT', 'SHIPPING', 'UNIT'))
+);
+
+COMMENT ON TABLE  sm_cupones IS 'Cupones asignados a cada cliente; sustituye a cupones/*.json';
+COMMENT ON COLUMN sm_cupones.voucher_id IS 'Identificador de Voucherify (v_...); clave principal';
+COMMENT ON COLUMN sm_cupones.customer_id IS 'Identificador del cliente en Voucherify (cust_...)';
+COMMENT ON COLUMN sm_cupones.valor IS 'Céntimos si AMOUNT, porcentaje si PERCENT, 100 si SHIPPING, NULL si UNIT';
+COMMENT ON COLUMN sm_cupones.producto IS 'Nombre del producto regalado si UNIT';
+COMMENT ON COLUMN sm_cupones.importe_maximo IS 'discount.amount_limit de Voucherify, en céntimos';
+COMMENT ON COLUMN sm_cupones.quantity IS 'Usos permitidos. NULL en Voucherify significa ilimitado';
+COMMENT ON COLUMN sm_cupones.descripcion_corta IS 'Descripción de la campaña (data.campaign.description)';
+COMMENT ON COLUMN sm_cupones.notificado_en IS 'Momento en que se lanzó el evento externo en SalesManago; NULL si aún no';
+
+CREATE INDEX IF NOT EXISTS ix_sm_cupones_customer
+    ON sm_cupones (cliente, customer_id);
+
+
+-- ---------------------------------------------------------------------------
 -- Permisos
 --
 -- Mismo usuario que el conector de Blueshift. Se conceden explícitamente
@@ -129,5 +196,5 @@ CREATE INDEX IF NOT EXISTS ix_sm_eventos_fallidos
 -- ---------------------------------------------------------------------------
 
 GRANT USAGE ON SCHEMA loyalty TO loyalty_app;
-GRANT SELECT, INSERT, UPDATE ON sm_clientes, sm_eventos_pendientes TO loyalty_app;
+GRANT SELECT, INSERT, UPDATE ON sm_clientes, sm_eventos_pendientes, sm_cupones TO loyalty_app;
 GRANT USAGE ON SEQUENCE sm_clientes_id_seq, sm_eventos_pendientes_id_seq TO loyalty_app;

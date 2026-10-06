@@ -9,8 +9,8 @@ use RuntimeException;
 /**
  * Cliente de la API de SalesManago.
  *
- * Solo cubre contact/upsert, que es lo que usan registro_club.php y el alta de
- * cliente de Voucherify. Sustituye a las dos copias de curl sin timeout de los
+ * Cubre contact/upsert (registro_club.php) y v2/contact/addContactExtEvent
+ * (ManejadorCuponAsignado). Sustituye a las copias de curl sin timeout de los
  * scripts originales y saca las credenciales del código al .env.
  *
  * AUTENTICACIÓN
@@ -42,13 +42,7 @@ final class ApiSalesManago
      */
     public static function upsertContacto(array $datos, bool $reintentarAmbiguos = false): ?string
     {
-        $payload = [
-            'clientId'    => Config::requerir('SALESMANAGO_CLIENT_ID'),
-            'apiKey'      => Config::requerir('SALESMANAGO_API_KEY'),
-            'requestTime' => (int) (microtime(true) * 1000),
-            'sha'         => Config::requerir('SALESMANAGO_SHA'),
-            'owner'       => Config::requerir('SALESMANAGO_OWNER'),
-        ] + $datos;
+        $payload = self::credenciales() + $datos;
 
         $respuesta = Http::postJson(
             url: self::base() . '/api/contact/upsert',
@@ -72,6 +66,69 @@ final class ApiSalesManago
         ]);
 
         return is_string($contactId) && $contactId !== '' ? $contactId : null;
+    }
+
+    /**
+     * Registra un evento externo en un contacto ya existente. Es lo que
+     * dispara los correos automáticos configurados en SalesManago.
+     *
+     * Sin reintentos de respuestas ambiguas: si la petición llegó, el correo
+     * puede haber salido, y repetirla lo enviaría dos veces.
+     *
+     * @param string               $email  Correo del contacto
+     * @param array<string,mixed>  $evento contactEvent: date, contactExtEventType,
+     *                                     value, description, detail1..detail20...
+     *
+     * @return string|null eventId devuelto por SalesManago, si lo devuelve
+     *
+     * @throws RuntimeException si SalesManago no confirma el evento
+     */
+    public static function anadirEventoExterno(string $email, array $evento): ?string
+    {
+        $payload = self::credenciales() + [
+            'email'        => $email,
+            'contactEvent' => $evento,
+        ];
+
+        $respuesta = Http::postJson(
+            url: self::base() . '/api/v2/contact/addContactExtEvent',
+            payload: $payload,
+            cabeceras: ['Accept: application/json'],
+            reintentarAmbiguos: false,
+        );
+
+        if (!$respuesta->ok() || $respuesta->valor('success') !== true) {
+            throw new RuntimeException(
+                'SalesManago rechazó el evento externo: ' . $respuesta->resumen()
+                . self::motivo($respuesta->valor('message'))
+            );
+        }
+
+        $eventId = $respuesta->valor('eventId');
+
+        Log::info('SalesManago: evento externo registrado', [
+            'evento'  => is_string($eventId) ? $eventId : null,
+            'tipo'    => $evento['contactExtEventType'] ?? null,
+            'detail1' => $evento['detail1'] ?? null,
+        ]);
+
+        return is_string($eventId) && $eventId !== '' ? $eventId : null;
+    }
+
+    /**
+     * Autenticación de SalesManago: va en el cuerpo, no en cabecera.
+     *
+     * @return array<string,mixed>
+     */
+    private static function credenciales(): array
+    {
+        return [
+            'clientId'    => Config::requerir('SALESMANAGO_CLIENT_ID'),
+            'apiKey'      => Config::requerir('SALESMANAGO_API_KEY'),
+            'requestTime' => (int) (microtime(true) * 1000),
+            'sha'         => Config::requerir('SALESMANAGO_SHA'),
+            'owner'       => Config::requerir('SALESMANAGO_OWNER'),
+        ];
     }
 
     /**
