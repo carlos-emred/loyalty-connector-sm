@@ -118,7 +118,7 @@ $cumpleanos = trim((string) ($entrada['cumpleaños'] ?? $entrada['cumpleanos'] ?
 $password         = (string) ($entrada['password'] ?? '');
 $passwordRepetida = (string) ($entrada['password_repetida'] ?? '');
 
-if ($dni === '' || $email === '' || $telefono === '' || $nombre === '' || $password === '') {
+if ($email === '' || $telefono === '' || $nombre === '' || $password === '') {
     responder(400, false, 'Datos necesarios incompletos');
 }
 
