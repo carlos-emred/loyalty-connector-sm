@@ -30,9 +30,9 @@ SET search_path TO loyalty, public;
 -- Usuarios registrados en el club a través de registro_club.php.
 --
 -- La clave es el correo y no el id de Voucherify, al revés que en clientes:
--- el registro llega antes de que Voucherify cree al cliente, y el correo es
--- también lo que identifica el contacto en SalesManago. El id de Voucherify se
--- rellena después, cuando llega su customer.created a completar_usuario.php.
+-- la fila se crea antes de llamar a Voucherify, y el correo es también lo
+-- que identifica el contacto en SalesManago. El id de Voucherify se rellena
+-- en el mismo registro, con la respuesta del alta.
 --
 -- El correo se guarda siempre en minúsculas, desde el código, para que la
 -- restricción de unicidad no admita el mismo usuario dos veces.
@@ -50,10 +50,9 @@ CREATE TABLE IF NOT EXISTS sm_clientes (
     telefono                text,
     genero                  text,
     fecha_nacimiento        date,
-
+    password_hash           text,
     voucherify_id           text,
     salesmanago_contact_id  text,
-
     registrado_en           timestamptz,
     sincronizado_en         timestamptz,
     creado_en               timestamptz NOT NULL DEFAULT now(),
@@ -65,7 +64,8 @@ CREATE TABLE IF NOT EXISTS sm_clientes (
 COMMENT ON TABLE  sm_clientes IS 'Socios del club registrados en SalesManago';
 COMMENT ON COLUMN sm_clientes.cliente IS 'Cliente de EMRED al que pertenece la fila';
 COMMENT ON COLUMN sm_clientes.email IS 'Siempre en minúsculas; identifica el contacto en SalesManago';
-COMMENT ON COLUMN sm_clientes.voucherify_id IS 'Identificador de Voucherify (cust_...); llega con customer.created';
+COMMENT ON COLUMN sm_clientes.password_hash IS 'Hash de password_hash() de PHP; nunca la contraseña en claro';
+COMMENT ON COLUMN sm_clientes.voucherify_id IS 'Identificador de Voucherify (cust_...); lo devuelve el alta en registro_club.php';
 COMMENT ON COLUMN sm_clientes.salesmanago_contact_id IS 'contactId devuelto por SalesManago en el último upsert';
 COMMENT ON COLUMN sm_clientes.registrado_en IS 'Último paso por registro_club.php; NULL si solo llegó el alta de Voucherify';
 COMMENT ON COLUMN sm_clientes.sincronizado_en IS 'Último upsert confirmado por SalesManago; NULL si nunca se confirmó';

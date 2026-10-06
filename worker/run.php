@@ -35,7 +35,6 @@ require_once __DIR__ . '/../bootstrap.php';
 use SalesManago\Config;
 use SalesManago\Db;
 use SalesManago\Eventos\Despachador;
-use SalesManago\Eventos\ManejadorAltaCliente;
 use SalesManago\Log;
 
 Log::fijarCanal('worker');
@@ -55,11 +54,13 @@ $unaVez = in_array('--una-vez', $argv, true);
 // -----------------------------------------------------------------------------
 // Manejadores
 // -----------------------------------------------------------------------------
-// Por ahora solo customer.created. Añadir un tipo es registrar aquí su
-// manejador: el bucle de abajo no sabe nada de tipos de evento.
+// Ahora mismo ninguno: el único que había (customer.created, de
+// completar_usuario.php) se retiró porque registro_club.php ya recibe el id de
+// Voucherify en la respuesta del alta. Sin manejadores, cualquier evento que
+// llegue a la cola se descarta. Añadir un tipo es registrar aquí su manejador:
+// el bucle de abajo no sabe nada de tipos de evento.
 
 $despachador = new Despachador();
-$despachador->registrar(new ManejadorAltaCliente());
 
 // -----------------------------------------------------------------------------
 // Señales

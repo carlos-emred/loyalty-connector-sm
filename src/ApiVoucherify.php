@@ -20,9 +20,9 @@ use RuntimeException;
  * llamada no crea duplicados, así que aquí sí se reintentan las respuestas
  * ambiguas.
  *
- * Voucherify solo emite customer.created la primera vez; las actualizaciones
- * no pasan por completar_usuario.php. Por eso el llamante guarda el id que
- * devuelve esta llamada en lugar de esperar al webhook.
+ * La respuesta trae el id del cliente (cust_...) tanto si lo crea como si lo
+ * actualiza, así que el llamante lo guarda directamente sin depender del
+ * webhook customer.created, que además solo se emite la primera vez.
  */
 final class ApiVoucherify
 {

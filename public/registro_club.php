@@ -23,10 +23,9 @@ declare(strict_types=1);
  * Si SalesManago falla, la fila queda con sincronizado_en a NULL y el usuario
  * recibe un error; al reintentar el registro se vuelve a enviar todo.
  *
- * El alta en Voucherify dispara customer.created hacia completar_usuario.php,
- * que repite el voucherifyId en SalesManago. Es redundante pero inocuo: fija
- * el mismo valor. Se mantiene porque cubre los clientes que Voucherify crea
- * por otras vías.
+ * El id de Voucherify sale de la respuesta del alta, así que no hace falta
+ * esperar a su webhook customer.created: este script es el único que escribe
+ * voucherify_id en sm_clientes y voucherifyId en SalesManago.
  *
  * DIFERENCIAS CON EL SCRIPT ORIGINAL (v2/registro_club.php)
  * ---------------------------------------------------------
@@ -43,6 +42,22 @@ declare(strict_types=1);
  * - El alta en Voucherify del borrador v2 usaba el correo como source_id. Aquí
  *   va el DNI, que es el convenio de los dos conectores (ver
  *   registrarEnVoucherify()).
+ * - La contraseña se guarda en sm_clientes como hash (password_hash), nunca en
+ *   claro, y no se envía a SalesManago ni a Voucherify. El borrador v2 la
+ *   mandaba en claro como propiedad «pass» del contacto, donde la vería
+ *   cualquiera con acceso al CRM o a sus exportaciones.
+ *
+ * CONTRASEÑA
+ * ----------
+ * Obligatoria. Debe coincidir con password_repetida y tener entre
+ * PASSWORD_MIN_CARACTERES caracteres y PASSWORD_MAX_BYTES bytes: bcrypt ignora
+ * lo que pase de 72 bytes, y aceptarlo daría por buena cualquier contraseña
+ * que compartiese ese prefijo.
+ *
+ * Un segundo registro con el mismo correo no cambia la contraseña ya
+ * guardada: si lo hiciera, cualquiera que conociese el correo de un socio
+ * podría sustituírsela. Cambiarla es tarea de un flujo propio, con el usuario
+ * identificado.
  *
  * ENTRADA
  * -------
@@ -52,6 +67,8 @@ declare(strict_types=1);
  *   {
  *     "dni":        "12345678A",
  *     "email":      "cliente@…",
+ *     "password":          "…",
+ *     "password_repetida": "…",
  *     "nombre":     "…",
  *     "apellido":   "…",
  *     "telefono":   "…",
@@ -63,6 +80,8 @@ declare(strict_types=1);
  * ------
  *   200 {"success": true,  "message": "Registro correcto"}
  *   400 {"success": false, "message": "Datos necesarios incompletos"}
+ *   400 {"success": false, "message": "Las contraseñas no coinciden"}
+ *   400 {"success": false, "message": "La contraseña debe tener entre 8 y 72 caracteres"}
  *   502 {"success": false, "message": "No se pudo completar el registro"}
  */
 
@@ -74,6 +93,12 @@ use SalesManago\Auth;
 use SalesManago\Cors;
 use SalesManago\Db;
 use SalesManago\Log;
+
+/** Longitud mínima de la contraseña, en caracteres. */
+const PASSWORD_MIN_CARACTERES = 8;
+
+/** Límite de bcrypt: lo que pase de aquí no interviene en el hash. */
+const PASSWORD_MAX_BYTES = 72;
 
 Cors::aplicar();
 Auth::exigirMetodo('POST');
@@ -89,9 +114,30 @@ $telefono   = trim((string) ($entrada['telefono'] ?? ''));
 $genero     = trim((string) ($entrada['genero'] ?? ''));
 $cumpleanos = trim((string) ($entrada['cumpleaños'] ?? $entrada['cumpleanos'] ?? ''));
 
-if ($dni === '' || $email === '' || $telefono === '' || $nombre === '') {
+// Sin trim: los espacios forman parte de la contraseña.
+$password         = (string) ($entrada['password'] ?? '');
+$passwordRepetida = (string) ($entrada['password_repetida'] ?? '');
+
+if ($dni === '' || $email === '' || $telefono === '' || $nombre === '' || $password === '') {
     responder(400, false, 'Datos necesarios incompletos');
 }
+
+if (!hash_equals($password, $passwordRepetida)) {
+    responder(400, false, 'Las contraseñas no coinciden');
+}
+
+if (mb_strlen($password) < PASSWORD_MIN_CARACTERES || strlen($password) > PASSWORD_MAX_BYTES) {
+    responder(400, false, sprintf(
+        'La contraseña debe tener entre %d y %d caracteres',
+        PASSWORD_MIN_CARACTERES,
+        PASSWORD_MAX_BYTES
+    ));
+}
+
+$passwordHash = password_hash($password, PASSWORD_DEFAULT);
+
+// A partir de aquí la contraseña en claro no se necesita.
+unset($password, $passwordRepetida, $entrada['password'], $entrada['password_repetida']);
 
 if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
     responder(400, false, 'El email no es válido');
@@ -105,7 +151,7 @@ if ($cumpleanos !== '' && $fechaNacimiento === null) {
     Log::warning('Registro: fecha de nacimiento con formato no reconocido; se ignora');
 }
 
-$idFila = guardarEnBbdd($email, $dni, $nombre, $apellido, $telefono, $genero, $fechaNacimiento);
+$idFila = guardarEnBbdd($email, $dni, $nombre, $apellido, $telefono, $genero, $fechaNacimiento, $passwordHash);
 
 try {
     $voucherifyId = registrarEnVoucherify($email, $dni, $nombre, $apellido, $telefono, $genero, $fechaNacimiento);
@@ -159,6 +205,9 @@ responder(200, true, 'Registro correcto');
  * fallar: es el mismo usuario corrigiendo el formulario. Los opcionales que
  * llegan vacíos no borran los que ya se conocían. voucherify_id no se toca
  * aquí: se escribe cuando Voucherify confirma el alta.
+ *
+ * password_hash solo se escribe si la fila no tenía uno: un nuevo registro con
+ * el mismo correo no sustituye la contraseña (ver CONTRASEÑA, arriba).
  */
 function guardarEnBbdd(
     string $email,
@@ -168,11 +217,12 @@ function guardarEnBbdd(
     string $telefono,
     string $genero,
     ?DateTimeImmutable $fechaNacimiento,
+    string $passwordHash,
 ): int {
     return (int) Db::valor(
         'INSERT INTO sm_clientes
-                (cliente, email, dni, nombre, apellido, telefono, genero, fecha_nacimiento, registrado_en)
-         VALUES (:cli, :email, :dni, :nombre, :apellido, :telefono, :genero, :fecha, now())
+                (cliente, email, dni, nombre, apellido, telefono, genero, fecha_nacimiento, password_hash, registrado_en)
+         VALUES (:cli, :email, :dni, :nombre, :apellido, :telefono, :genero, :fecha, :hash, now())
          ON CONFLICT (cliente, email) DO UPDATE
             SET dni = EXCLUDED.dni,
                 nombre = EXCLUDED.nombre,
@@ -180,6 +230,7 @@ function guardarEnBbdd(
                 telefono = EXCLUDED.telefono,
                 genero = COALESCE(EXCLUDED.genero, sm_clientes.genero),
                 fecha_nacimiento = COALESCE(EXCLUDED.fecha_nacimiento, sm_clientes.fecha_nacimiento),
+                password_hash = COALESCE(sm_clientes.password_hash, EXCLUDED.password_hash),
                 registrado_en = now(),
                 actualizado_en = now()
          RETURNING id',
@@ -192,6 +243,7 @@ function guardarEnBbdd(
             'telefono' => $telefono,
             'genero'   => $genero !== '' ? $genero : null,
             'fecha'    => $fechaNacimiento?->format('Y-m-d'),
+            'hash'     => $passwordHash,
         ]
     );
 }
@@ -202,8 +254,7 @@ function guardarEnBbdd(
  * SOURCE_ID
  * ---------
  * Va el DNI, no el correo como en el borrador v2: es el convenio de los
- * conectores (ManejadorAltaCliente busca por DNI cuando el cliente no trae
- * correo, y el de Blueshift publica el source_id como «dni»). Con el correo,
+ * conectores (el de Blueshift publica el source_id como «dni»). Con el correo,
  * un usuario dado de alta por otra vía con su DNI quedaría duplicado.
  *
  * Los nombres de «metadata» (last_name, genero, dni) son los del borrador.
