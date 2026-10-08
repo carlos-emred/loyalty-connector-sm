@@ -18,9 +18,6 @@ final class ResultadoCupon
     /** Ya había un código igual en la tienda. No se crea nada. */
     public const YA_EXISTE = 'ya_existe';
 
-    /** No hay cliente en Shopify con ese correo. No se crea nada. */
-    public const CLIENTE_NO_ENCONTRADO = 'cliente_no_encontrado';
-
     /** Shopify falló o rechazó la regla. Si quedó algo a medias, se revirtió. */
     public const FALLIDO = 'fallido';
 
@@ -42,11 +39,6 @@ final class ResultadoCupon
     public static function yaExiste(string $codigo): self
     {
         return new self(self::YA_EXISTE, $codigo);
-    }
-
-    public static function clienteNoEncontrado(string $codigo): self
-    {
-        return new self(self::CLIENTE_NO_ENCONTRADO, $codigo);
     }
 
     public static function fallido(string $codigo, string $motivo): self

@@ -12,7 +12,7 @@ Por ahora hay tres flujos:
 |---|---|
 | `public/registro_club.php` | Síncrono. Recibe el formulario del storefront, valida la contraseña, responde 409 si el correo ya tiene un registro completado (`sincronizado_en` no nulo), guarda al usuario en `sm_clientes` (contraseña solo como hash en `password_hash`), hace upsert del cliente en Voucherify (`source_id` = DNI) y después del contacto en SalesManago con su `voucherifyId` |
 | `public/webhooks/anadir_cupon.php` | Webhook `voucher.published` de Voucherify (cupón asignado a un cliente). Encola en `sm_eventos_pendientes`; el worker (`ManejadorCuponAsignado`) guarda el cupón en `sm_cupones` y lanza un evento externo (`detail1` = `COMUNICAR_CUPON`) en el contacto de SalesManago, que dispara el correo. `notificado_en` impide enviarlo dos veces. Las tarjetas de fidelización (`LOYALTY_CARD`) solo se guardan en `sm_clientes.loyalty_card`: ni `sm_cupones` ni SalesManago |
-| `public/crear_cupon.php` | Síncrono, lo llama el storefront. Crea el cupón en Shopify (regla de precio + código, `ApiShopify`) restringido al cliente del correo recibido. Todos los datos del cupón llegan en la petición: no consulta a Voucherify ni a la base. 409 si el código ya existe, 404 si no hay cliente en Shopify con ese correo |
+| `public/crear_cupon.php` | Síncrono, lo llama el storefront. Comprueba que el correo recibido tiene fila en `sm_clientes` (404 si no) y crea el cupón en Shopify (regla de precio + código, `ApiShopify`). No busca al cliente en Shopify, porque exigiría acceso al email de los clientes (datos protegidos de nivel 2), así que el cupón no queda restringido a un cliente. Todos los datos del cupón llegan en la petición: no consulta a Voucherify. 409 si el código ya existe |
 
 El id de Voucherify (`cust_...`) sale de la respuesta del alta en `registro_club.php`. Por eso no hay webhook `customer.created`: el antiguo `completar_usuario.php` se retiró. `sm_clientes` tiene también `tier`, `saldo_puntos` y `total_puntos`, que de momento ningún flujo rellena.
 
@@ -48,8 +48,8 @@ La cola es propia a propósito: si los dos conectores reciben el mismo evento de
 
 - API REST de administración (`price_rules` y `discount_codes`), versión en `SHOPIFY_API_VERSION`. Shopify la considera heredada pero sigue funcionando; es la que usa también el conector de Blueshift.
 - Si el código no se puede asociar a la regla, la regla se elimina para no dejarla huérfana.
-- El cupón de Shopify no lleva fechas de inicio ni de caducidad ni `quantity`: la validez la decide Voucherify, que se consulta siempre justo antes de aplicarlo. Shopify solo aplica el descuento. `starts_at` es obligatorio en Shopify y se pone el momento de creación.
-- Los importes de la petición van en céntimos (`count`, `maxCount`), salvo `minimum_purchase_quantity` y `reduction_amount`, que van en euros como en el script original.
+- El cupón de Shopify no lleva fechas de inicio ni de caducidad ni `quantity`: la validez la decide Voucherify, que se consulta siempre justo antes de aplicarlo. Shopify solo aplica el descuento. `starts_at` es obligatorio en Shopify y se pone el momento de creación. Tampoco hay importe máximo: `maxCount` se ignora.
+- Los importes de la petición van en céntimos (`count`), salvo `minimum_purchase_quantity` y `reduction_amount`, que van en euros como en el script original.
 
 ## Despliegue inicial
 

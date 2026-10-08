@@ -3,23 +3,32 @@
 declare(strict_types=1);
 
 /**
- * Crea un cupón en Shopify, restringido a un cliente.
+ * Crea un cupón en Shopify para un cliente registrado en sm_clientes.
  *
  * Sustituye a v2/crear_cupon.php. Todos los datos del cupón llegan en la
- * petición: no se consulta a Voucherify ni a la base.
+ * petición: no se consulta a Voucherify.
+ *
+ * EL CLIENTE SE COMPRUEBA EN LA BASE, NO EN SHOPIFY
+ * -------------------------------------------------
+ * Solo se crea el cupón si el correo recibido tiene fila en sm_clientes. No se
+ * busca al cliente en Shopify: esa búsqueda exige que la app de Shopify tenga
+ * acceso al email de los clientes (datos protegidos de nivel 2). Sin su id de
+ * Shopify, el cupón no puede restringirse a ese cliente y vale para cualquiera
+ * que tenga el código.
  *
  * SEGURIDAD
  * ---------
  * Lo llama el storefront desde el navegador, así que el secreto X-Loyalty-Key
  * es público (ver Auth.php) y este endpoint crea en la tienda el descuento que
  * se le pida. Las únicas barreras son CORS, que no frena una petición hecha
- * fuera del navegador, y que el cupón queda restringido a un cliente existente
- * en Shopify. Pendiente de decidir una protección real.
+ * fuera del navegador, y que el correo tiene que estar registrado
+ * en sm_clientes. Pendiente de decidir una protección real.
  *
  * DIFERENCIAS CON EL SCRIPT ORIGINAL
  * ----------------------------------
- * - El correo es obligatorio. El original buscaba el cliente aunque llegase
- *   vacío y se quedaba con el primer resultado de Shopify.
+ * - El correo es obligatorio y se comprueba en sm_clientes. El original buscaba
+ *   el cliente en Shopify aunque llegase vacío y se quedaba con el primer
+ *   resultado.
  * - El resto de correcciones están en ApiShopify.
  *
  * SIN VALIDEZ EN SHOPIFY
@@ -28,6 +37,8 @@ declare(strict_types=1);
  * (quantity): si se puede usar lo decide Voucherify, al que se consulta
  * siempre justo antes de aplicarlo. Shopify solo aplica el descuento. Si la
  * petición trae quantity, start_date o expiration_date, se ignoran.
+ *
+ * Tampoco hay importe máximo: maxCount se ignora (ver ApiShopify).
  *
  * ENTRADA
  * -------
@@ -39,7 +50,6 @@ declare(strict_types=1);
  *     "email":  "cliente@…",              obligatorio
  *     "type":   "AMOUNT",                 AMOUNT | PERCENT | SHIPPING (y alias)
  *     "count":  1000,                     céntimos si AMOUNT, % si PERCENT
- *     "maxCount": 1500,                   tope en céntimos (amount_limit)
  *     "gift_product_id": null,            id de producto de Shopify que se regala
  *     "metadata": {
  *       "product_id": null,               id de producto de Shopify
@@ -61,7 +71,7 @@ declare(strict_types=1);
  *   200 {"success": true, "message": "Cupón creado correctamente",
  *        "priceRuleId": "…", "discountCode": {"id": "…", "code": "…"}}
  *   400 datos no válidos o carrito sin productos
- *   404 no hay cliente en Shopify con ese correo
+ *   404 el correo no está en sm_clientes
  *   409 el código ya existe en Shopify
  *   502 Shopify no pudo crear el cupón
  */
@@ -71,6 +81,7 @@ require_once __DIR__ . '/../bootstrap.php';
 use SalesManago\ApiShopify;
 use SalesManago\Auth;
 use SalesManago\Cors;
+use SalesManago\Db;
 use SalesManago\Log;
 use SalesManago\Shopify\EspecificacionCupon;
 use SalesManago\Shopify\ResultadoCupon;
@@ -99,9 +110,7 @@ try {
         codigo: trim((string) ($datos['code'] ?? '')),
         tipo: $tipo,
         valor: $valor,
-        emailCliente: mb_strtolower(trim((string) ($datos['email'] ?? ''))),
         soloUno: $soloUno,
-        importeMaximo: entero($datos['maxCount'] ?? null),
         minimoCompra: is_numeric($minimoEuros) ? (int) round((float) $minimoEuros * 100) : null,
         productoId: $productoId,
         categoriaId: $categoriaId,
@@ -123,6 +132,24 @@ try {
     responder(400, false, $e->getMessage());
 }
 
+// El correo se guarda siempre en minúsculas en sm_clientes.
+$email = mb_strtolower(trim((string) ($datos['email'] ?? '')));
+
+if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+    responder(400, false, 'Falta el correo del cliente o no es válido.');
+}
+
+$existe = Db::valor(
+    'SELECT 1 FROM sm_clientes WHERE cliente = :cli AND email = :email',
+    ['cli' => Db::cliente(), 'email' => $email]
+);
+
+if ($existe === null) {
+    Log::warning('crear_cupon: el correo no está en sm_clientes', ['codigo' => $cupon->codigo]);
+
+    responder(404, false, 'No se encontró ningún cliente con ese email');
+}
+
 $resultado = ApiShopify::crearCupon($cupon);
 
 switch ($resultado->estado) {
@@ -142,11 +169,6 @@ switch ($resultado->estado) {
         Log::info('crear_cupon: el código ya existe en Shopify', ['codigo' => $cupon->codigo]);
 
         responder(409, false, "El código '{$cupon->codigo}' ya existe");
-
-    case ResultadoCupon::CLIENTE_NO_ENCONTRADO:
-        Log::warning('crear_cupon: no hay cliente en Shopify con ese correo', ['codigo' => $cupon->codigo]);
-
-        responder(404, false, 'No se encontró ningún cliente con ese email');
 
     default:
         Log::error('crear_cupon: Shopify no creó el cupón', [
@@ -249,13 +271,6 @@ function texto(mixed $valor): ?string
     $valor = primerValor($valor);
 
     return is_scalar($valor) ? trim((string) $valor) : null;
-}
-
-function entero(mixed $valor): ?int
-{
-    $valor = primerValor($valor);
-
-    return is_numeric($valor) ? (int) $valor : null;
 }
 
 /**

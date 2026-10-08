@@ -6,15 +6,14 @@ namespace SalesManago;
 
 use DateTimeImmutable;
 use DateTimeInterface;
-use RuntimeException;
 use SalesManago\Shopify\EspecificacionCupon;
 use SalesManago\Shopify\ResultadoCupon;
 
 /**
  * Cliente de la API REST de administración de Shopify.
  *
- * Solo cubre lo que necesita crear_cupon.php: comprobar si un código existe,
- * buscar un cliente por correo y crear el cupón (regla de precio + código).
+ * Solo cubre lo que necesita crear_cupon.php: comprobar si un código existe y
+ * crear el cupón (regla de precio + código).
  * Copia adaptada de Loyalty\Ecommerce\ShopifyAdapter del conector de
  * Blueshift.
  *
@@ -29,20 +28,26 @@ use SalesManago\Shopify\ResultadoCupon;
  * - Timeouts en todas las llamadas y credenciales en el .env.
  * - Se elimina priceRuleExiste(): price_rules.json no filtra por título, así
  *   que devolvía «existe» en cuanto la tienda tuviera una sola regla.
- * - El cliente se busca por correo exacto y se comprueba que coincide: la
- *   búsqueda de Shopify es aproximada y el original se quedaba con el primer
- *   resultado, que podía ser otro cliente.
+ * - No se busca al cliente en Shopify ni se restringe el cupón a él. La
+ *   búsqueda necesita que la app tenga acceso al email de los clientes (datos
+ *   protegidos de nivel 2), y el original se quedaba con el primer resultado,
+ *   que podía ser otro cliente. Que el cliente existe lo comprueba
+ *   crear_cupon.php en sm_clientes.
  * - El producto regalo era un descuento fijo de 100 €, no un 100 %: un
  *   producto de más de 100 € no salía gratis. Ahora es un 100 %.
  * - Si el código no se puede asociar a la regla, la regla se elimina en lugar
  *   de quedar huérfana en la tienda.
+ * - Sin importe máximo (maxCount). El original convertía el cupón en uno de
+ *   importe fijo por ese tope, así que «10 € con tope de 100 €» acababa
+ *   descontando 100 €. Shopify no admite topes; si hacen falta, los controla
+ *   Voucherify al validar.
  */
 final class ApiShopify
 {
     private const VERSION_POR_DEFECTO = '2026-07';
 
     /**
-     * Crea el cupón restringido al cliente de la especificación.
+     * Crea el cupón, válido para cualquier cliente de la tienda.
      */
     public static function crearCupon(EspecificacionCupon $cupon): ResultadoCupon
     {
@@ -50,19 +55,9 @@ final class ApiShopify
             return ResultadoCupon::yaExiste($cupon->codigo);
         }
 
-        try {
-            $idCliente = self::buscarClientePorEmail($cupon->emailCliente);
-        } catch (RuntimeException $e) {
-            return ResultadoCupon::fallido($cupon->codigo, $e->getMessage());
-        }
-
-        if ($idCliente === null) {
-            return ResultadoCupon::clienteNoEncontrado($cupon->codigo);
-        }
-
         $respuesta = Http::postJson(
             url: self::url('price_rules.json'),
-            payload: ['price_rule' => self::reglaDePrecio($cupon, $idCliente)],
+            payload: ['price_rule' => self::reglaDePrecio($cupon)],
             cabeceras: self::cabeceras(),
         );
 
@@ -136,79 +131,16 @@ final class ApiShopify
     }
 
     /**
-     * Id del cliente con ese correo exacto, o null si Shopify no tiene
-     * ninguno.
-     *
-     * null significa solo eso: que Shopify respondió bien y no hay cliente.
-     * Si la búsqueda falla, o Shopify devuelve clientes sin el campo email,
-     * no se puede saber y se lanza excepción, para que crear_cupon.php
-     * responda 502 y no un 404 engañoso.
-     *
-     * Clientes sin email: pasa cuando la app de Shopify no tiene concedido el
-     * acceso a datos protegidos de clientes (protected customer data). La
-     * búsqueda los encuentra, pero Shopify oculta el correo en la respuesta.
-     *
-     * @throws RuntimeException si no se puede determinar
-     */
-    private static function buscarClientePorEmail(string $email): ?string
-    {
-        $email = mb_strtolower(trim($email));
-
-        $respuesta = Http::getJson(
-            self::url('customers/search.json') . '?query=' . rawurlencode('email:' . $email),
-            self::cabeceras(),
-        );
-
-        self::vigilarVersion($respuesta);
-
-        if (!$respuesta->ok()) {
-            throw new RuntimeException(
-                'Shopify: fallo al buscar el cliente: ' . $respuesta->resumen() . ' — ' . self::errores($respuesta)
-            );
-        }
-
-        $clientes = $respuesta->valor('customers', []);
-        $clientes = is_array($clientes) ? $clientes : [];
-        $sinEmail = 0;
-
-        foreach ($clientes as $cliente) {
-            $suEmail = $cliente['email'] ?? null;
-
-            if (!is_string($suEmail) || $suEmail === '') {
-                $sinEmail++;
-                continue;
-            }
-
-            if (mb_strtolower($suEmail) === $email && isset($cliente['id'])) {
-                return (string) $cliente['id'];
-            }
-        }
-
-        if ($sinEmail > 0) {
-            throw new RuntimeException(sprintf(
-                'Shopify: la búsqueda devolvió %d cliente(s) sin el campo email; la app no tiene '
-                . 'acceso a los datos protegidos de clientes (protected customer data)',
-                $sinEmail
-            ));
-        }
-
-        Log::info('Shopify: búsqueda de cliente sin coincidencia exacta', ['resultados' => count($clientes)]);
-
-        return null;
-    }
-
-    /**
      * Traduce la especificación a una price_rule, con las mismas reglas que
      * crearCuponShopify() del original salvo las correcciones de la cabecera.
      *
      * @return array<string,mixed>
      */
-    private static function reglaDePrecio(EspecificacionCupon $cupon, string $idCliente): array
+    private static function reglaDePrecio(EspecificacionCupon $cupon): array
     {
         $regla = [
             'title'                     => $cupon->codigo,
-            'customer_selection'        => 'prerequisite',
-            'prerequisite_customer_ids' => [(int) $idCliente],
+            'customer_selection'        => 'all',
             // Shopify exige starts_at. Se pone el momento de creación y no se
             // fija ends_at: la validez la decide Voucherify, que se consulta
             // siempre antes de aplicar el cupón. Por lo mismo, quantity no
@@ -255,13 +187,7 @@ final class ApiShopify
 
         $regla['target_type'] = 'line_item';
 
-        // Con importe máximo, el original convertía el cupón en uno de importe
-        // fijo por ese tope, fuera cual fuera el tipo: Shopify no admite topes
-        // en los porcentajes. Se conserva ese criterio.
-        if ($cupon->importeMaximo !== null) {
-            $regla['value_type'] = 'fixed_amount';
-            $regla['value'] = '-' . self::euros($cupon->importeMaximo);
-        } elseif ($cupon->esPorcentaje()) {
+        if ($cupon->esPorcentaje()) {
             $regla['value_type'] = 'percentage';
             $regla['value'] = '-' . $cupon->valor . '.0';
         } else {

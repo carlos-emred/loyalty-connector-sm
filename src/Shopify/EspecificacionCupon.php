@@ -11,7 +11,7 @@ use InvalidArgumentException;
  *
  * Copia adaptada de Loyalty\Ecommerce\EspecificacionCupon del conector de
  * Blueshift, con las reglas de v2/crear_cupon.php que aquel no tenía: producto
- * regalo, importe máximo y artículo más barato del carrito.
+ * regalo y artículo más barato del carrito.
  *
  * Todos los datos llegan en la petición (crear_cupon.php): no se consulta a
  * Voucherify. Por eso la validación es estricta y ocurre aquí, una sola vez,
@@ -31,7 +31,6 @@ use InvalidArgumentException;
  *
  *   valor          céntimos si AMOUNT, porcentaje entero si PERCENT, sin uso
  *                  si SHIPPING o si hay producto regalo.
- *   importeMaximo  céntimos (discount.amount_limit de Voucherify).
  *   minimoCompra   céntimos.
  */
 final class EspecificacionCupon
@@ -51,21 +50,11 @@ final class EspecificacionCupon
 
         public readonly int $valor,
 
-        /** Correo del cliente al que se restringe el cupón. Obligatorio. */
-        public readonly string $emailCliente,
-
         /**
          * only_one del original: un solo uso, una vez por cliente y, si no
          * hay producto ni colección, solo sobre el artículo más barato.
          */
         public readonly bool $soloUno = false,
-
-        /**
-         * Tope del descuento en céntimos. Ver ApiShopify::reglaDePrecio():
-         * Shopify no admite topes, y el original convertía el cupón en uno de
-         * importe fijo por ese valor.
-         */
-        public readonly ?int $importeMaximo = null,
 
         public readonly ?int $minimoCompra = null,
 
@@ -107,9 +96,7 @@ final class EspecificacionCupon
             codigo: $this->codigo,
             tipo: $this->tipo,
             valor: $this->valor,
-            emailCliente: $this->emailCliente,
             soloUno: $this->soloUno,
-            importeMaximo: $this->importeMaximo,
             minimoCompra: $this->minimoCompra,
             productoId: $this->productoId,
             categoriaId: $this->categoriaId,
@@ -140,11 +127,7 @@ final class EspecificacionCupon
             throw new InvalidArgumentException('Tipo de cupón no reconocido. Admitidos: AMOUNT, PERCENT, SHIPPING.');
         }
 
-        if (filter_var($this->emailCliente, FILTER_VALIDATE_EMAIL) === false) {
-            throw new InvalidArgumentException('Falta el correo del cliente o no es válido.');
-        }
-
-        $sinValor = $this->esEnvioGratis() || $this->regaloProductoId !== null || $this->importeMaximo !== null;
+        $sinValor = $this->esEnvioGratis() || $this->regaloProductoId !== null;
 
         if (!$sinValor && $this->valor <= 0) {
             throw new InvalidArgumentException('El valor del descuento debe ser mayor que cero.');
@@ -152,10 +135,6 @@ final class EspecificacionCupon
 
         if ($this->esPorcentaje() && $this->valor > 100) {
             throw new InvalidArgumentException('Un descuento porcentual no puede superar el 100 %.');
-        }
-
-        if ($this->importeMaximo !== null && $this->importeMaximo <= 0) {
-            throw new InvalidArgumentException('El importe máximo debe ser mayor que cero.');
         }
 
         if ($this->minimoCompra !== null && $this->minimoCompra < 0) {
