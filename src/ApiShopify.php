@@ -6,6 +6,7 @@ namespace SalesManago;
 
 use DateTimeImmutable;
 use DateTimeInterface;
+use RuntimeException;
 use SalesManago\Shopify\EspecificacionCupon;
 use SalesManago\Shopify\ResultadoCupon;
 
@@ -49,7 +50,11 @@ final class ApiShopify
             return ResultadoCupon::yaExiste($cupon->codigo);
         }
 
-        $idCliente = self::buscarClientePorEmail($cupon->emailCliente);
+        try {
+            $idCliente = self::buscarClientePorEmail($cupon->emailCliente);
+        } catch (RuntimeException $e) {
+            return ResultadoCupon::fallido($cupon->codigo, $e->getMessage());
+        }
 
         if ($idCliente === null) {
             return ResultadoCupon::clienteNoEncontrado($cupon->codigo);
@@ -131,32 +136,63 @@ final class ApiShopify
     }
 
     /**
-     * Id del cliente con ese correo exacto, o null si no hay ninguno.
+     * Id del cliente con ese correo exacto, o null si Shopify no tiene
+     * ninguno.
+     *
+     * null significa solo eso: que Shopify respondió bien y no hay cliente.
+     * Si la búsqueda falla, o Shopify devuelve clientes sin el campo email,
+     * no se puede saber y se lanza excepción, para que crear_cupon.php
+     * responda 502 y no un 404 engañoso.
+     *
+     * Clientes sin email: pasa cuando la app de Shopify no tiene concedido el
+     * acceso a datos protegidos de clientes (protected customer data). La
+     * búsqueda los encuentra, pero Shopify oculta el correo en la respuesta.
+     *
+     * @throws RuntimeException si no se puede determinar
      */
     private static function buscarClientePorEmail(string $email): ?string
     {
         $email = mb_strtolower(trim($email));
 
         $respuesta = Http::getJson(
-            self::url('customers/search.json') . '?query=' . rawurlencode('email:"' . $email . '"'),
+            self::url('customers/search.json') . '?query=' . rawurlencode('email:' . $email),
             self::cabeceras(),
         );
 
         self::vigilarVersion($respuesta);
 
         if (!$respuesta->ok()) {
-            Log::warning('Shopify: fallo al buscar el cliente', ['resumen' => $respuesta->resumen()]);
-
-            return null;
+            throw new RuntimeException(
+                'Shopify: fallo al buscar el cliente: ' . $respuesta->resumen() . ' — ' . self::errores($respuesta)
+            );
         }
 
         $clientes = $respuesta->valor('customers', []);
+        $clientes = is_array($clientes) ? $clientes : [];
+        $sinEmail = 0;
 
-        foreach (is_array($clientes) ? $clientes : [] as $cliente) {
-            if (mb_strtolower((string) ($cliente['email'] ?? '')) === $email && isset($cliente['id'])) {
+        foreach ($clientes as $cliente) {
+            $suEmail = $cliente['email'] ?? null;
+
+            if (!is_string($suEmail) || $suEmail === '') {
+                $sinEmail++;
+                continue;
+            }
+
+            if (mb_strtolower($suEmail) === $email && isset($cliente['id'])) {
                 return (string) $cliente['id'];
             }
         }
+
+        if ($sinEmail > 0) {
+            throw new RuntimeException(sprintf(
+                'Shopify: la búsqueda devolvió %d cliente(s) sin el campo email; la app no tiene '
+                . 'acceso a los datos protegidos de clientes (protected customer data)',
+                $sinEmail
+            ));
+        }
+
+        Log::info('Shopify: búsqueda de cliente sin coincidencia exacta', ['resultados' => count($clientes)]);
 
         return null;
     }
