@@ -196,6 +196,56 @@ CREATE INDEX IF NOT EXISTS ix_sm_cupones_customer
 
 
 -- ---------------------------------------------------------------------------
+-- sm_movimientos_puntos
+--
+-- Historial de movimientos de puntos de cada cliente. Sustituye a los ficheros
+-- puntos/{customer_id}.json de los scripts originales. Lo lee
+-- obtener_datos_usuario.php.
+--
+-- customer_id es el id de Voucherify (cust_...), el mismo que guarda
+-- sm_clientes.voucherify_id.
+--
+-- transaction_id es único: si el mismo movimiento llega dos veces, el INSERT
+-- choca y no se duplica.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS sm_movimientos_puntos (
+    id              bigserial   PRIMARY KEY,
+    cliente         text        NOT NULL,
+    transaction_id  text        NOT NULL,
+    customer_id     text        NOT NULL,
+    voucher_id      text,
+
+    tipo            text,
+    puntos          integer     NOT NULL,
+    saldo           integer     NOT NULL,
+    total           integer     NOT NULL,
+    tier            text,
+
+    reward_id       text,
+    reward_name     text,
+
+    fecha           timestamptz NOT NULL,
+    payload         jsonb,
+    creado_en       timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT uq_sm_movimientos_transaccion UNIQUE (cliente, transaction_id)
+);
+
+COMMENT ON TABLE  sm_movimientos_puntos IS 'Historial de movimientos de puntos; sustituye a puntos/*.json';
+COMMENT ON COLUMN sm_movimientos_puntos.transaction_id IS 'Identificador de Voucherify (vtx_...); clave de idempotencia';
+COMMENT ON COLUMN sm_movimientos_puntos.customer_id IS 'Identificador del cliente en Voucherify (cust_...)';
+COMMENT ON COLUMN sm_movimientos_puntos.puntos IS 'Variación del movimiento, negativa si es un gasto';
+COMMENT ON COLUMN sm_movimientos_puntos.saldo IS 'Saldo resultante tras el movimiento';
+COMMENT ON COLUMN sm_movimientos_puntos.total IS 'Acumulado histórico tras el movimiento; determina el tier';
+COMMENT ON COLUMN sm_movimientos_puntos.tipo IS 'POINTS_ACCRUAL, POINTS_REDEMPTION, etc.';
+
+-- Consulta de obtener_datos_usuario.php: el historial de un cliente por fecha.
+CREATE INDEX IF NOT EXISTS ix_sm_movimientos_cliente_fecha
+    ON sm_movimientos_puntos (cliente, customer_id, fecha DESC);
+
+
+-- ---------------------------------------------------------------------------
 -- Permisos
 --
 -- Mismo usuario que el conector de Blueshift. Se conceden explícitamente
@@ -204,5 +254,5 @@ CREATE INDEX IF NOT EXISTS ix_sm_cupones_customer
 -- ---------------------------------------------------------------------------
 
 GRANT USAGE ON SCHEMA loyalty TO loyalty_app;
-GRANT SELECT, INSERT, UPDATE ON sm_clientes, sm_eventos_pendientes, sm_cupones TO loyalty_app;
-GRANT USAGE ON SEQUENCE sm_clientes_id_seq, sm_eventos_pendientes_id_seq TO loyalty_app;
+GRANT SELECT, INSERT, UPDATE ON sm_clientes, sm_eventos_pendientes, sm_cupones, sm_movimientos_puntos TO loyalty_app;
+GRANT USAGE ON SEQUENCE sm_clientes_id_seq, sm_eventos_pendientes_id_seq, sm_movimientos_puntos_id_seq TO loyalty_app;
