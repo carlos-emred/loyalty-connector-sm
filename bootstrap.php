@@ -210,6 +210,8 @@ Config::verificarObligatorias([
     'VOUCHERIFY_API',
     'VOUCHERIFY_APP_ID',
     'VOUCHERIFY_SECRET_KEY',
+    'SHOPIFY_STORE',
+    'SHOPIFY_TOKEN',
 ]);
 
 // -----------------------------------------------------------------------------

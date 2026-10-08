@@ -6,12 +6,13 @@ Contexto del proyecto. Léelo antes de tocar nada.
 
 Versión para **SalesManago** del conector de Blueshift (`/opt/loyalty/repo`). Mismo esqueleto (`bootstrap`, `Config`, `Http`, `Log`, `Auth`, `Cors`, `Db`, cola en PostgreSQL y worker), mismas reglas: **las de su `CLAUDE.md` se aplican aquí igual**, en especial timeouts en todas las llamadas (`Http::postJson`), nada sensible en `public/`, nada se borra de la base y logs sin credenciales ni datos personales.
 
-Por ahora hay dos flujos:
+Por ahora hay tres flujos:
 
 | Fichero | Qué hace |
 |---|---|
 | `public/registro_club.php` | Síncrono. Recibe el formulario del storefront, valida la contraseña, responde 409 si el correo ya tiene un registro completado (`sincronizado_en` no nulo), guarda al usuario en `sm_clientes` (contraseña solo como hash en `password_hash`), hace upsert del cliente en Voucherify (`source_id` = DNI) y después del contacto en SalesManago con su `voucherifyId` |
 | `public/webhooks/anadir_cupon.php` | Webhook `voucher.published` de Voucherify (cupón asignado a un cliente). Encola en `sm_eventos_pendientes`; el worker (`ManejadorCuponAsignado`) guarda el cupón en `sm_cupones` y lanza un evento externo (`detail1` = `COMUNICAR_CUPON`) en el contacto de SalesManago, que dispara el correo. `notificado_en` impide enviarlo dos veces. Las tarjetas de fidelización (`LOYALTY_CARD`) solo se guardan en `sm_clientes.loyalty_card`: ni `sm_cupones` ni SalesManago |
+| `public/crear_cupon.php` | Síncrono, lo llama el storefront. Crea el cupón en Shopify (regla de precio + código, `ApiShopify`) restringido al cliente del correo recibido. Todos los datos del cupón llegan en la petición: no consulta a Voucherify ni a la base. 409 si el código ya existe, 404 si no hay cliente en Shopify con ese correo |
 
 El id de Voucherify (`cust_...`) sale de la respuesta del alta en `registro_club.php`. Por eso no hay webhook `customer.created`: el antiguo `completar_usuario.php` se retiró. `sm_clientes` tiene también `tier`, `saldo_puntos` y `total_puntos`, que de momento ningún flujo rellena.
 
@@ -43,6 +44,13 @@ La cola es propia a propósito: si los dos conectores reciben el mismo evento de
 - Las posiciones `detail1`..`detail10` del evento externo del cupón son las del script original (`v2/webhooks/añadir_cupon.php`) y la plantilla del correo se apoya en ellas. No se mueven. El código del cupón va en `detail11`, porque `value` es numérico en SalesManago.
 - El evento externo tampoco reintenta respuestas ambiguas: cada evento es un correo.
 
+## Shopify
+
+- API REST de administración (`price_rules` y `discount_codes`), versión en `SHOPIFY_API_VERSION`. Shopify la considera heredada pero sigue funcionando; es la que usa también el conector de Blueshift.
+- Si el código no se puede asociar a la regla, la regla se elimina para no dejarla huérfana.
+- El cupón de Shopify no lleva fechas de inicio ni de caducidad ni `quantity`: la validez la decide Voucherify, que se consulta siempre justo antes de aplicarlo. Shopify solo aplica el descuento. `starts_at` es obligatorio en Shopify y se pone el momento de creación.
+- Los importes de la petición van en céntimos (`count`, `maxCount`), salvo `minimum_purchase_quantity` y `reduction_amount`, que van en euros como en el script original.
+
 ## Despliegue inicial
 
 ```bash
@@ -65,3 +73,4 @@ En Voucherify, un webhook **nuevo** para `voucher.published` hacia `https://<dom
 
 - `forceOptIn` y `forceOptOut` (y los de teléfono) van los dos a `true`, como en el script original. Son contradictorios: confirmar con marketing el estado que debe quedar.
 - Dominio definitivo en `nginx-salesmanago.conf`.
+- `crear_cupon.php` crea en Shopify el descuento que se le pida, y su secreto es público porque lo llama el navegador. Falta una protección real (firma del App Proxy de Shopify o comprobar el código contra `sm_cupones`).
