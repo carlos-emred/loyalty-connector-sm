@@ -9,8 +9,9 @@ use RuntimeException;
 /**
  * Cliente de la API de Voucherify.
  *
- * Solo cubre el alta de clientes (POST /v1/customers), que es lo que usa
- * registro_club.php. Mismas credenciales que el conector de Blueshift
+ * Cubre el alta de clientes (POST /v1/customers, registro_club.php) y las
+ * recompensas de un miembro (GET /v1/loyalties/members/{id}/rewards,
+ * obtener_loyalty.php). Mismas credenciales que el conector de Blueshift
  * (X-App-Id y X-App-Token en cabecera), pero leídas del .env de este proyecto.
  *
  * IDEMPOTENCIA
@@ -41,11 +42,7 @@ final class ApiVoucherify
         $respuesta = Http::postJson(
             url: self::base() . '/v1/customers',
             payload: $datos,
-            cabeceras: [
-                'Accept: application/json',
-                'X-App-Id: '    . Config::requerir('VOUCHERIFY_APP_ID'),
-                'X-App-Token: ' . Config::requerir('VOUCHERIFY_SECRET_KEY'),
-            ],
+            cabeceras: ['Accept: application/json', ...self::credenciales()],
             reintentarAmbiguos: true,
         );
 
@@ -64,6 +61,45 @@ final class ApiVoucherify
         ]);
 
         return $id;
+    }
+
+    /**
+     * Recompensas disponibles para un miembro del programa de fidelización,
+     * tal como las devuelve Voucherify.
+     *
+     * @return array<string,mixed>|null null si Voucherify no conoce al miembro (404)
+     *
+     * @throws RuntimeException si Voucherify falla por otro motivo
+     */
+    public static function recompensasMiembro(string $memberId): ?array
+    {
+        $respuesta = Http::getJson(
+            url: self::base() . '/v1/loyalties/members/' . rawurlencode($memberId) . '/rewards',
+            cabeceras: self::credenciales(),
+        );
+
+        if ($respuesta->codigo === 404) {
+            return null;
+        }
+
+        if (!$respuesta->ok() || $respuesta->json === null) {
+            throw new RuntimeException(
+                'Voucherify no devolvió las recompensas: ' . $respuesta->resumen() . self::motivo($respuesta)
+            );
+        }
+
+        return $respuesta->json;
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function credenciales(): array
+    {
+        return [
+            'X-App-Id: '    . Config::requerir('VOUCHERIFY_APP_ID'),
+            'X-App-Token: ' . Config::requerir('VOUCHERIFY_SECRET_KEY'),
+        ];
     }
 
     /**

@@ -6,7 +6,7 @@ Contexto del proyecto. Léelo antes de tocar nada.
 
 Versión para **SalesManago** del conector de Blueshift (`/opt/loyalty/repo`). Mismo esqueleto (`bootstrap`, `Config`, `Http`, `Log`, `Auth`, `Cors`, `Db`, cola en PostgreSQL y worker), mismas reglas: **las de su `CLAUDE.md` se aplican aquí igual**, en especial timeouts en todas las llamadas (`Http::postJson`), nada sensible en `public/`, nada se borra de la base y logs sin credenciales ni datos personales.
 
-Por ahora hay cuatro flujos:
+Por ahora hay cinco flujos:
 
 | Fichero | Qué hace |
 |---|---|
@@ -14,6 +14,7 @@ Por ahora hay cuatro flujos:
 | `public/webhooks/anadir_cupon.php` | Webhook `voucher.published` de Voucherify (cupón asignado a un cliente). Encola en `sm_eventos_pendientes`; el worker (`ManejadorCuponAsignado`) guarda el cupón en `sm_cupones` y lanza un evento externo (`detail1` = `COMUNICAR_CUPON`) en el contacto de SalesManago, que dispara el correo. `notificado_en` impide enviarlo dos veces. Las tarjetas de fidelización (`LOYALTY_CARD`) solo se guardan en `sm_clientes.loyalty_card`: ni `sm_cupones` ni SalesManago |
 | `public/crear_cupon.php` | Síncrono, lo llama el storefront. Comprueba que el correo recibido tiene fila en `sm_clientes` (404 si no) y crea el cupón en Shopify (regla de precio + código, `ApiShopify`). No busca al cliente en Shopify, porque exigiría acceso al email de los clientes (datos protegidos de nivel 2), así que el cupón no queda restringido a un cliente. Todos los datos del cupón llegan en la petición: no consulta a Voucherify. 409 si el código ya existe |
 | `public/obtener_datos_usuario.php` | Síncrono, lo llama el storefront. Con el correo, devuelve de PostgreSQL (`Storefront\DatosUsuario`) los puntos, tier y tarjeta de `sm_clientes`, los cupones **válidos** de `sm_cupones` (sin caducar, ya empezados y con usos disponibles) y el historial de `sm_movimientos_puntos` de los últimos 10 meses. No llama a ninguna API ni escribe nada. La forma de la respuesta es la del script original y la web depende de ella. Sin datos personales en la respuesta: el endpoint responde a cualquiera que conozca un correo |
+| `public/obtener_loyalty.php` | Síncrono, lo llama el storefront. Con el `memberId`, pide a Voucherify las recompensas del miembro (`ApiVoucherify::recompensasMiembro`) y las devuelve tal cual, junto con los tiers leídos del fichero JSON `RUTA_TIERS_JSON`, como en el conector de Blueshift. 404 si Voucherify no conoce al miembro, 502 si falla. Si el fichero de tiers falta o no es válido, `tiers` va a null y las recompensas se devuelven igual. Todavía no hay webhook que mantenga el fichero: se actualiza a mano |
 
 El id de Voucherify (`cust_...`) sale de la respuesta del alta en `registro_club.php`. Por eso no hay webhook `customer.created`: el antiguo `completar_usuario.php` se retiró. `sm_clientes` tiene también `tier`, `saldo_puntos` y `total_puntos`, y existe `sm_movimientos_puntos`; de momento ningún flujo los rellena.
 
