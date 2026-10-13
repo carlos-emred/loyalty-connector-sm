@@ -36,6 +36,7 @@ use SalesManago\Config;
 use SalesManago\Db;
 use SalesManago\Eventos\Despachador;
 use SalesManago\Eventos\ManejadorCuponAsignado;
+use SalesManago\Eventos\ManejadorCuponConsumido;
 use SalesManago\Log;
 
 Log::fijarCanal('worker');
@@ -55,12 +56,14 @@ $unaVez = in_array('--una-vez', $argv, true);
 // -----------------------------------------------------------------------------
 // Manejadores
 // -----------------------------------------------------------------------------
-// Por ahora solo voucher.published (webhooks/anadir_cupon.php). Un evento de
-// otro tipo que llegue a la cola se descarta. Añadir un tipo es registrar aquí
+// voucher.published (webhooks/anadir_cupon.php) y redemption.succeeded
+// (webhooks/consumir_cupon.php). Un evento de otro tipo que llegue a la cola
+// se descarta. Añadir un tipo es registrar aquí
 // su manejador: el bucle de abajo no sabe nada de tipos de evento.
 
 $despachador = new Despachador();
 $despachador->registrar(new ManejadorCuponAsignado());
+$despachador->registrar(new ManejadorCuponConsumido());
 
 // -----------------------------------------------------------------------------
 // Señales

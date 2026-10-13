@@ -20,8 +20,7 @@ declare(strict_types=1);
  * reenvío era un correo más al cliente.
  *
  * Solo encola voucher.published. Cualquier otro tipo se contesta con 200 y se
- * descarta aquí mismo, para que suscribir de más en Voucherify no llene la
- * cola.
+ * descarta (ver RecepcionWebhook).
  *
  * CONFIGURACIÓN EN VOUCHERIFY
  * ---------------------------
@@ -33,77 +32,6 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../../bootstrap.php';
 
-use SalesManago\Auth;
-use SalesManago\Db;
-use SalesManago\Log;
+use SalesManago\RecepcionWebhook;
 
-// Sin CORS: esto no lo llama ningún navegador.
-Auth::exigirMetodo('POST');
-Auth::exigir();
-
-$payload = Auth::cuerpoJson();
-
-// event.id antes que el id de la raíz: el segundo identifica el envío y puede
-// cambiar entre reintentos; el primero identifica el hecho ocurrido.
-$idExterno = $payload['event']['id'] ?? $payload['id'] ?? null;
-$tipo = $payload['type'] ?? $payload['event']['type'] ?? null;
-
-if ($tipo !== 'voucher.published') {
-    Log::info('Webhook ignorado: no es voucher.published', [
-        'tipo' => is_string($tipo) ? $tipo : '(desconocido)',
-    ]);
-
-    responder(200, true, 'Evento ignorado.', ['encolado' => false]);
-}
-
-if (!is_string($idExterno) || $idExterno === '') {
-    Log::warning('Webhook sin identificador de evento; se rechaza', ['tipo' => $tipo]);
-
-    responder(400, false, 'El webhook no incluye un identificador de evento.');
-}
-
-try {
-    $encolado = Db::encolar($tipo, $idExterno, $payload);
-} catch (Throwable $e) {
-    Log::error('No se pudo encolar el webhook', [
-        'tipo'       => $tipo,
-        'id_externo' => $idExterno,
-        'mensaje'    => $e->getMessage(),
-    ]);
-
-    // 503 y no 500: es un fallo temporal y queremos que Voucherify reintente.
-    responder(503, false, 'El servicio no puede aceptar el evento en este momento.');
-}
-
-if (!$encolado) {
-    Log::info('Webhook duplicado; ya estaba en la cola', [
-        'tipo'       => $tipo,
-        'id_externo' => $idExterno,
-    ]);
-
-    responder(200, true, 'Evento ya recibido anteriormente.', ['duplicado' => true]);
-}
-
-Log::info('Webhook encolado', ['tipo' => $tipo, 'id_externo' => $idExterno]);
-
-responder(200, true, 'Evento encolado.', ['duplicado' => false]);
-
-
-/**
- * @param array<string,mixed> $extra
- * @return never
- */
-function responder(int $codigo, bool $exito, string $mensaje, array $extra = []): void
-{
-    if (!headers_sent()) {
-        http_response_code($codigo);
-        header('Content-Type: application/json; charset=utf-8');
-    }
-
-    echo json_encode(
-        ['success' => $exito, 'message' => $mensaje] + $extra,
-        JSON_UNESCAPED_UNICODE
-    );
-
-    exit;
-}
+RecepcionWebhook::encolar('voucher.published');
