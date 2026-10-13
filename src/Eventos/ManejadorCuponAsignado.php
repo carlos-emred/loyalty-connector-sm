@@ -214,6 +214,16 @@ final class ManejadorCuponAsignado implements ManejadorEvento
      * Inserta el cupón o, si ya estaba, refresca los datos que cambian en
      * Voucherify. notificado_en no se toca aquí.
      *
+     * ESTADO
+     * ------
+     * Un cupón nuevo entra como disponible, salvo que ya llegue agotado
+     * (redeemed_quantity igual a quantity: canjeado) o caducado. Si ya estaba,
+     * solo puede pasar de disponible a canjeado o caducado, nunca volver: un
+     * voucher.published repetido no resucita un cupón consumido.
+     *
+     * redeemed_quantity nunca retrocede (GREATEST): si el canje se procesó
+     * antes que un voucher.published reenviado, se conserva el del canje.
+     *
      * @param array<string,mixed> $voucher
      * @param array<string,mixed> $datos
      * @param array{tipo: string, valor: ?int, producto: ?string} $descuento
@@ -229,6 +239,10 @@ final class ManejadorCuponAsignado implements ManejadorEvento
         $metadata = is_array($voucher['metadata'] ?? null) ? $voucher['metadata'] : [];
         $redencion = is_array($voucher['redemption'] ?? null) ? $voucher['redemption'] : [];
         $minimo = $metadata['minimum_purchase_quantity'] ?? null;
+        // quantity a null en Voucherify significa usos ilimitados.
+        $quantity = isset($redencion['quantity']) ? (int) $redencion['quantity'] : null;
+        $canjeados = (int) ($redencion['redeemed_quantity'] ?? 0);
+        $caducidad = $voucher['expiration_date'] ?? null;
 
         Db::ejecutar(
             'INSERT INTO sm_cupones (
@@ -237,19 +251,28 @@ final class ManejadorCuponAsignado implements ManejadorEvento
                     importe_maximo, quantity, redeemed_quantity,
                     descripcion, descripcion_corta, image_url, minimo_compra,
                     solo_uno, product_id, category_id, category_name,
-                    fecha_inicio, fecha_caducidad, creado_voucherify_en, metadata
+                    fecha_inicio, fecha_caducidad, creado_voucherify_en, estado
              ) VALUES (
                     :voucher_id, :cli, :customer_id, :codigo,
                     :campaign_id, :campaign_name, :tipo, :valor, :producto,
                     :maximo, :quantity, :redeemed,
                     :descripcion, :descripcion_corta, :image_url, :minimo,
                     :solo_uno, :product_id, :category_id, :category_name,
-                    :inicio, :caducidad, :creado, :metadata
+                    :inicio, :caducidad, :creado, :estado
              )
              ON CONFLICT (voucher_id) DO UPDATE
                 SET quantity = EXCLUDED.quantity,
-                    redeemed_quantity = EXCLUDED.redeemed_quantity,
+                    redeemed_quantity = GREATEST(sm_cupones.redeemed_quantity, EXCLUDED.redeemed_quantity),
                     fecha_caducidad = EXCLUDED.fecha_caducidad,
+                    estado = CASE
+                        WHEN sm_cupones.estado <> \'disponible\' THEN sm_cupones.estado
+                        WHEN EXCLUDED.quantity IS NOT NULL
+                         AND GREATEST(sm_cupones.redeemed_quantity, EXCLUDED.redeemed_quantity) >= EXCLUDED.quantity
+                            THEN \'canjeado\'
+                        WHEN EXCLUDED.fecha_caducidad IS NOT NULL AND EXCLUDED.fecha_caducidad <= now()
+                            THEN \'caducado\'
+                        ELSE sm_cupones.estado
+                    END,
                     actualizado_en = now()',
             [
                 'voucher_id'        => $voucherId,
@@ -264,9 +287,8 @@ final class ManejadorCuponAsignado implements ManejadorEvento
                 'maximo'            => isset($voucher['discount']['amount_limit'])
                     ? (int) $voucher['discount']['amount_limit']
                     : null,
-                // quantity a null en Voucherify significa usos ilimitados.
-                'quantity'          => isset($redencion['quantity']) ? (int) $redencion['quantity'] : null,
-                'redeemed'          => (int) ($redencion['redeemed_quantity'] ?? 0),
+                'quantity'          => $quantity,
+                'redeemed'          => $canjeados,
                 'descripcion'       => $metadata['description'] ?? null,
                 'descripcion_corta' => $datos['campaign']['description'] ?? null,
                 'image_url'         => $metadata['image_url'] ?? null,
@@ -276,11 +298,35 @@ final class ManejadorCuponAsignado implements ManejadorEvento
                 'category_id'       => isset($metadata['category_id']) ? self::texto($metadata['category_id']) : null,
                 'category_name'     => $metadata['category_name'] ?? null,
                 'inicio'            => $voucher['start_date'] ?? null,
-                'caducidad'         => $voucher['expiration_date'] ?? null,
+                'caducidad'         => $caducidad,
                 'creado'            => $voucher['created_at'] ?? null,
-                'metadata'          => json_encode($metadata, JSON_UNESCAPED_UNICODE) ?: '{}',
+                'estado'            => self::estadoInicial($quantity, $canjeados, $caducidad),
             ]
         );
+    }
+
+    /**
+     * Estado de un cupón que entra en sm_cupones: canjeado si ya no le quedan
+     * usos, caducado si ya pasó su fecha, disponible en otro caso.
+     *
+     * La comprobación de null en quantity va explícita: null es «usos
+     * ilimitados», y en PHP 0 >= null da true.
+     */
+    private static function estadoInicial(?int $quantity, int $canjeados, mixed $caducidad): string
+    {
+        if ($quantity !== null && $canjeados >= $quantity) {
+            return 'canjeado';
+        }
+
+        if (is_string($caducidad) && $caducidad !== '') {
+            $fecha = strtotime($caducidad);
+
+            if ($fecha !== false && $fecha <= time()) {
+                return 'caducado';
+            }
+        }
+
+        return 'disponible';
     }
 
     /**

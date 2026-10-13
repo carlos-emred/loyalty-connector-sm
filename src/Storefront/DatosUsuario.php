@@ -15,27 +15,29 @@ use SalesManago\Log;
  * con la forma que devolvía v2/obtener_datos_usuario.php.
  *
  * Copia adaptada de Loyalty\Storefront\DescuentosUsuario del conector de
- * Blueshift. Todo sale de PostgreSQL: no se llama a Voucherify ni a nadie, y
- * no se escribe nada.
+ * Blueshift. Todo sale de PostgreSQL: no se llama a Voucherify ni a nadie. La
+ * única escritura es marcar el estado de los cupones del cliente que ya no
+ * son válidos (ver CUPONES DISPONIBLES).
  *
  * LA FORMA DE LA RESPUESTA ES UN CONTRATO
  * ---------------------------------------
  * Claves, anidamiento y orden de las listas reproducen los del original, que
  * leía cupones/{id}.json y puntos/{id}.json. La web depende de ellos.
  *
- * CUPONES VÁLIDOS
- * ---------------
- * El original borraba del fichero los cupones caducados. Aquí no se borra
- * nada: los que no son válidos simplemente no se devuelven. Un cupón deja de
- * serlo si:
+ * CUPONES DISPONIBLES
+ * -------------------
+ * Solo se devuelven los cupones con estado 'disponible' (y que ya hayan
+ * empezado, si tienen fecha_inicio). El original borraba del fichero los
+ * caducados; aquí nada se borra: antes de leer, los disponibles del cliente
+ * que ya no lo son cambian de estado:
  *
- *   - ha caducado (fecha_caducidad pasada),
- *   - todavía no ha empezado (fecha_inicio futura),
- *   - ha agotado sus usos (redeemed_quantity >= quantity).
+ *   - canjeado: redeemed_quantity llegó a quantity. quantity es el número de
+ *     veces que se puede consumir y redeemed_quantity las que se ha
+ *     consumido; al igualarse, no se puede consumir más. Normalmente ya lo ha
+ *     marcado ManejadorCuponConsumido al llegar el canje.
+ *   - caducado: pasó su fecha_caducidad.
  *
- * Los datos son los que llegaron con voucher.published. sm_cupones no sabe de
- * canjes ni de bajas posteriores en Voucherify: un cupón canjeado sigue
- * apareciendo hasta que algo actualice redeemed_quantity.
+ * Un cupón con quantity null es de usos ilimitados: nunca se agota.
  *
  * SIN DATOS PERSONALES
  * --------------------
@@ -138,20 +140,42 @@ final class DatosUsuario
      */
     private static function cupones(string $customerId): array
     {
+        $cliente = ['cli' => Db::cliente(), 'customer' => $customerId];
+
+        // Los disponibles que ya no lo son cambian de estado antes de leer.
+        // Agotado manda sobre caducado: si se consumió del todo, eso es lo que
+        // pasó.
+        Db::ejecutar(
+            "UPDATE sm_cupones
+                SET estado = CASE
+                        WHEN quantity IS NOT NULL AND redeemed_quantity >= quantity THEN 'canjeado'
+                        ELSE 'caducado'
+                    END,
+                    actualizado_en = now()
+              WHERE cliente = :cli
+                AND customer_id = :customer
+                AND estado = 'disponible'
+                AND (
+                       (quantity IS NOT NULL AND redeemed_quantity >= quantity)
+                    OR (fecha_caducidad IS NOT NULL AND fecha_caducidad <= now())
+                )",
+            $cliente
+        );
+
         // Del más antiguo al más reciente, como crecía cupones/{id}.json.
         $filas = Db::filas(
-            'SELECT codigo, tipo, valor, producto, importe_maximo,
+            "SELECT codigo, tipo, valor, producto, importe_maximo,
                     quantity, redeemed_quantity, descripcion, descripcion_corta,
-                    image_url, category_name, fecha_inicio, fecha_caducidad,
-                    creado_voucherify_en, creado_en, metadata
+                    image_url, product_id, category_id, category_name, solo_uno,
+                    minimo_compra, fecha_inicio, fecha_caducidad,
+                    creado_voucherify_en, creado_en
                FROM sm_cupones
               WHERE cliente = :cli
                 AND customer_id = :customer
-                AND (fecha_caducidad IS NULL OR fecha_caducidad > now())
+                AND estado = 'disponible'
                 AND (fecha_inicio IS NULL OR fecha_inicio <= now())
-                AND (quantity IS NULL OR redeemed_quantity < quantity)
-              ORDER BY creado_en, voucher_id',
-            ['cli' => Db::cliente(), 'customer' => $customerId]
+              ORDER BY creado_en, voucher_id",
+            $cliente
         );
 
         // array_values: json_encode convierte en objeto un array con claves
@@ -167,11 +191,6 @@ final class DatosUsuario
      */
     private static function formatearCupon(array $fila): array
     {
-        // Estos campos se leen del metadata en bruto y no de sus columnas, que
-        // los guardan como texto: la web recibía el valor tal cual lo enviaba
-        // Voucherify.
-        $metadata = self::metadata($fila['metadata'] ?? null);
-
         return [
             'code'                      => (string) $fila['codigo'],
             'type'                      => (string) $fila['tipo'],
@@ -179,11 +198,13 @@ final class DatosUsuario
             // el nombre del producto si es un regalo (UNIT).
             'count'                     => $fila['valor'] !== null ? (int) $fila['valor'] : ($fila['producto'] ?? null),
             'maxCount'                  => isset($fila['importe_maximo']) ? (int) $fila['importe_maximo'] : null,
-            'category_id'               => $metadata['category_id'] ?? null,
-            'category_name'             => $metadata['category_name'] ?? ($fila['category_name'] ?? null),
-            'product_id'                => $metadata['product_id'] ?? null,
-            'only_one'                  => $metadata['only_one'] ?? null,
-            'minimum_purchase_quantity' => $metadata['minimum_purchase_quantity'] ?? null,
+            // Las columnas guardan los ids como texto. Antes llegaban con el
+            // tipo que enviaba Voucherify (número o texto).
+            'category_id'               => $fila['category_id'] ?? null,
+            'category_name'             => $fila['category_name'] ?? null,
+            'product_id'                => $fila['product_id'] ?? null,
+            'only_one'                  => self::soloUno($fila['solo_uno'] ?? null),
+            'minimum_purchase_quantity' => isset($fila['minimo_compra']) ? (int) $fila['minimo_compra'] : null,
             // null significa usos ilimitados y no debe acabar en 0.
             'quantity'                  => isset($fila['quantity']) ? (int) $fila['quantity'] : null,
             'redeemed_quantity'         => (int) $fila['redeemed_quantity'],
@@ -232,19 +253,17 @@ final class DatosUsuario
     }
 
     /**
-     * pdo_pgsql devuelve jsonb como texto.
-     *
-     * @return array<string,mixed>
+     * solo_uno se guarda como texto ('true', 'false' u otro valor tal cual
+     * llegó). Se devuelve como booleano cuando lo es.
      */
-    private static function metadata(mixed $json): array
+    private static function soloUno(mixed $valor): bool|string|null
     {
-        if (!is_string($json) || $json === '') {
-            return [];
-        }
-
-        $datos = json_decode($json, true);
-
-        return is_array($datos) ? $datos : [];
+        return match ($valor) {
+            null, ''  => null,
+            'true'    => true,
+            'false'   => false,
+            default   => (string) $valor,
+        };
     }
 
     /** Formato en que Voucherify envía las fechas: 2026-09-15T00:00:00.000Z. */

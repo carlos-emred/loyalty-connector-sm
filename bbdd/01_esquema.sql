@@ -141,6 +141,19 @@ CREATE INDEX IF NOT EXISTS ix_sm_eventos_fallidos
 --
 -- notificado_en evita mandar dos veces el correo: se escribe justo después de
 -- lanzar el evento externo en SalesManago y se consulta antes.
+--
+-- USOS Y ESTADO
+-- quantity es el número de veces que se puede consumir el cupón (NULL en
+-- Voucherify: ilimitado) y redeemed_quantity las que ya se ha consumido.
+-- Cuando son iguales, el cupón no se puede consumir más.
+--
+-- estado dice si el cupón está disponible. Nada se borra: un cupón deja de
+-- ofrecerse cambiando de estado.
+--   disponible  se puede usar.
+--   canjeado    redeemed_quantity llegó a quantity (ManejadorCuponConsumido,
+--               o ManejadorCuponAsignado si ya llegó agotado).
+--   caducado    pasó su fecha_caducidad (lo marca obtener_datos_usuario.php
+--               al consultar, o ManejadorCuponAsignado si ya llegó caducado).
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS sm_cupones (
@@ -172,13 +185,14 @@ CREATE TABLE IF NOT EXISTS sm_cupones (
     fecha_caducidad         timestamptz,
     creado_voucherify_en    timestamptz,
 
-    metadata                jsonb,
+    estado                  text        NOT NULL DEFAULT 'disponible',
     notificado_en           timestamptz,
     creado_en               timestamptz NOT NULL DEFAULT now(),
     actualizado_en          timestamptz NOT NULL DEFAULT now(),
 
     CONSTRAINT uq_sm_cupones_codigo UNIQUE (cliente, codigo),
-    CONSTRAINT ck_sm_cupones_tipo CHECK (tipo IN ('AMOUNT', 'PERCENT', 'SHIPPING', 'UNIT'))
+    CONSTRAINT ck_sm_cupones_tipo CHECK (tipo IN ('AMOUNT', 'PERCENT', 'SHIPPING', 'UNIT')),
+    CONSTRAINT ck_sm_cupones_estado CHECK (estado IN ('disponible', 'canjeado', 'caducado'))
 );
 
 COMMENT ON TABLE  sm_cupones IS 'Cupones asignados a cada cliente; sustituye a cupones/*.json';
@@ -187,7 +201,9 @@ COMMENT ON COLUMN sm_cupones.customer_id IS 'Identificador del cliente en Vouche
 COMMENT ON COLUMN sm_cupones.valor IS 'Céntimos si AMOUNT, porcentaje si PERCENT, 100 si SHIPPING, NULL si UNIT';
 COMMENT ON COLUMN sm_cupones.producto IS 'Nombre del producto regalado si UNIT';
 COMMENT ON COLUMN sm_cupones.importe_maximo IS 'discount.amount_limit de Voucherify, en céntimos';
-COMMENT ON COLUMN sm_cupones.quantity IS 'Usos permitidos. NULL en Voucherify significa ilimitado';
+COMMENT ON COLUMN sm_cupones.quantity IS 'Veces que se puede consumir. NULL en Voucherify significa ilimitado';
+COMMENT ON COLUMN sm_cupones.redeemed_quantity IS 'Veces que se ha consumido. Igual a quantity: no se puede consumir más';
+COMMENT ON COLUMN sm_cupones.estado IS 'disponible, canjeado o caducado; el cupón solo se ofrece si está disponible';
 COMMENT ON COLUMN sm_cupones.descripcion_corta IS 'Descripción de la campaña (data.campaign.description)';
 COMMENT ON COLUMN sm_cupones.notificado_en IS 'Momento en que se lanzó el evento externo en SalesManago; NULL si aún no';
 

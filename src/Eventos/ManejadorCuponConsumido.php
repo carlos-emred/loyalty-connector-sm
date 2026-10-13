@@ -13,13 +13,17 @@ use SalesManago\Log;
  * Sustituye a v2/webhooks/consumir_cupon.php. Actualiza los usos del cupón en
  * sm_cupones. No avisa a nadie.
  *
- * NO SE BORRA: SE AGOTA
- * ---------------------
+ * NO SE BORRA: PASA A CANJEADO
+ * ----------------------------
+ * quantity es el número de veces que se puede consumir el cupón y
+ * redeemed_quantity las que ya se ha consumido. Cuando son iguales, no se
+ * puede consumir más.
+ *
  * El original quitaba el cupón del fichero en su último uso. Aquí nada se
- * borra de la base: el cupón queda con redeemed_quantity igual a quantity, y
- * obtener_datos_usuario.php ya no lo devuelve porque no le quedan usos. Si no
- * era el último uso, sigue apareciendo con el contador actualizado, como en
- * el original.
+ * borra de la base: el cupón pasa a estado 'canjeado' y
+ * obtener_datos_usuario.php, que solo devuelve los disponibles, deja de
+ * ofrecerlo. Si no era el último uso, sigue disponible con el contador
+ * actualizado, como en el original.
  *
  * Un cupón con quantity null es de usos ilimitados: nunca se agota.
  *
@@ -89,10 +93,24 @@ final class ManejadorCuponConsumido implements ManejadorEvento
 
         $quantity = $fila['quantity'] !== null ? (int) $fila['quantity'] : null;
         $usados = (int) $fila['redeemed_quantity'];
+        $agotado = $quantity !== null && $usados >= $quantity;
+
+        if ($agotado) {
+            // Solo desde disponible: uno caducado conserva su estado.
+            Db::ejecutar(
+                "UPDATE sm_cupones
+                    SET estado = 'canjeado', actualizado_en = now()
+                  WHERE cliente = :cli
+                    AND customer_id = :customer
+                    AND voucher_id = :voucher
+                    AND estado = 'disponible'",
+                ['cli' => Db::cliente(), 'customer' => $customerId, 'voucher' => $fila['voucher_id']]
+            );
+        }
 
         Log::info(
-            $quantity !== null && $usados >= $quantity
-                ? 'Cupón canjeado por última vez; deja de ofrecerse'
+            $agotado
+                ? 'Cupón consumido por última vez; pasa a canjeado'
                 : 'Uso de cupón registrado',
             [
                 'evento'   => $idEvento,
