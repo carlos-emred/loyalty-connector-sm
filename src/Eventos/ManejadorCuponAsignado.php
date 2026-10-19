@@ -34,8 +34,9 @@ use RuntimeException;
  * TARJETAS DE FIDELIZACIÓN
  * ------------------------
  * voucher.published también llega cuando se asigna una LOYALTY_CARD. No es un
- * cupón: su código se guarda ÚNICAMENTE en sm_clientes.loyalty_card. No pasa
- * por sm_cupones ni se avisa a SalesManago. El original la enviaba a
+ * cupón: su código se guarda ÚNICAMENTE en sm_clientes.loyalty_card, y su
+ * campaign_id en sm_clientes.loyalty_campaign. No pasa por sm_cupones ni se
+ * avisa a SalesManago. El original la enviaba a
  * Blueshift con un identify, código heredado que en SalesManago no aplica.
  * Ver guardarTarjeta().
  *
@@ -82,7 +83,9 @@ final class ManejadorCuponAsignado implements ManejadorEvento
         }
 
         if (($voucher['type'] ?? null) === 'LOYALTY_CARD') {
-            $this->guardarTarjeta($cliente, $codigo, $customerId);
+            $campana = trim((string) ($voucher['campaign_id'] ?? ''));
+
+            $this->guardarTarjeta($cliente, $codigo, $campana !== '' ? $campana : null, $customerId);
 
             Log::info('Tarjeta de fidelización guardada en sm_clientes', [
                 'evento'   => $idEvento,
@@ -117,7 +120,11 @@ final class ManejadorCuponAsignado implements ManejadorEvento
     }
 
     /**
-     * Guarda el código de la tarjeta en sm_clientes.loyalty_card.
+     * Guarda el código de la tarjeta en sm_clientes.loyalty_card y su campaña
+     * en loyalty_campaign.
+     *
+     * Un payload sin campaign_id no borra la campaña que ya se conocía
+     * (COALESCE), como en el conector de Blueshift.
      *
      * Con correo en el payload, upsert por correo: si el cliente aún no tiene
      * fila (no pasó por registro_club.php, o el webhook llega antes de que
@@ -134,16 +141,17 @@ final class ManejadorCuponAsignado implements ManejadorEvento
      *
      * @throws RuntimeException si no hay fila a la que asignar la tarjeta
      */
-    private function guardarTarjeta(array $cliente, string $codigo, string $customerId): void
+    private function guardarTarjeta(array $cliente, string $codigo, ?string $campana, string $customerId): void
     {
         $email = mb_strtolower(trim((string) ($cliente['email'] ?? '')));
 
         if ($email !== '') {
             Db::ejecutar(
-                'INSERT INTO sm_clientes (cliente, email, voucherify_id, loyalty_card)
-                 VALUES (:cli, :email, :customer, :tarjeta)
+                'INSERT INTO sm_clientes (cliente, email, voucherify_id, loyalty_card, loyalty_campaign)
+                 VALUES (:cli, :email, :customer, :tarjeta, :campana)
                  ON CONFLICT (cliente, email) DO UPDATE
                     SET loyalty_card = EXCLUDED.loyalty_card,
+                        loyalty_campaign = COALESCE(EXCLUDED.loyalty_campaign, sm_clientes.loyalty_campaign),
                         voucherify_id = COALESCE(sm_clientes.voucherify_id, EXCLUDED.voucherify_id),
                         actualizado_en = now()',
                 [
@@ -151,6 +159,7 @@ final class ManejadorCuponAsignado implements ManejadorEvento
                     'email'    => $email,
                     'customer' => $customerId,
                     'tarjeta'  => $codigo,
+                    'campana'  => $campana,
                 ]
             );
 
@@ -160,12 +169,14 @@ final class ManejadorCuponAsignado implements ManejadorEvento
         $filas = Db::ejecutar(
             'UPDATE sm_clientes
                 SET loyalty_card = :tarjeta,
+                    loyalty_campaign = COALESCE(:campana, loyalty_campaign),
                     actualizado_en = now()
               WHERE cliente = :cli AND voucherify_id = :customer',
             [
                 'cli'      => Db::cliente(),
                 'customer' => $customerId,
                 'tarjeta'  => $codigo,
+                'campana'  => $campana,
             ]
         );
 

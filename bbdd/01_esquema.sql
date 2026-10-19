@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS sm_clientes (
     voucherify_id           text,
     salesmanago_contact_id  text,
     loyalty_card            text,
+    loyalty_campaign        text,
     tier                    text,
     saldo_puntos            integer,
     total_puntos            integer,
@@ -72,6 +73,7 @@ COMMENT ON COLUMN sm_clientes.password_hash IS 'Hash de password_hash() de PHP; 
 COMMENT ON COLUMN sm_clientes.voucherify_id IS 'Identificador de Voucherify (cust_...); lo devuelve el alta en registro_club.php';
 COMMENT ON COLUMN sm_clientes.salesmanago_contact_id IS 'contactId devuelto por SalesManago en el último upsert';
 COMMENT ON COLUMN sm_clientes.loyalty_card IS 'Código de la tarjeta de fidelización de Voucherify; llega con voucher.published (LOYALTY_CARD)';
+COMMENT ON COLUMN sm_clientes.loyalty_campaign IS 'campaign_id de la campaña de fidelización de la tarjeta; llega con ella';
 COMMENT ON COLUMN sm_clientes.tier IS 'Nivel del socio en el programa de fidelización';
 COMMENT ON COLUMN sm_clientes.saldo_puntos IS 'Puntos disponibles para canjear; NULL si aún no se conoce';
 COMMENT ON COLUMN sm_clientes.total_puntos IS 'Puntos acumulados desde el alta; NULL si aún no se conoce';

@@ -62,7 +62,7 @@ final class DatosUsuario
     public static function paraCorreo(string $email): ?array
     {
         $cliente = Db::fila(
-            'SELECT voucherify_id, saldo_puntos, total_puntos, tier, loyalty_card
+            'SELECT voucherify_id, saldo_puntos, total_puntos, tier, loyalty_card, loyalty_campaign
                FROM sm_clientes
               WHERE cliente = :cli AND email = :email',
             ['cli' => Db::cliente(), 'email' => mb_strtolower(trim($email))]
@@ -86,6 +86,9 @@ final class DatosUsuario
         $tarjeta = isset($cliente['loyalty_card']) && $cliente['loyalty_card'] !== ''
             ? (string) $cliente['loyalty_card']
             : null;
+        $campana = isset($cliente['loyalty_campaign']) && $cliente['loyalty_campaign'] !== ''
+            ? (string) $cliente['loyalty_campaign']
+            : null;
 
         return [
             'custom_attributes' => [
@@ -94,14 +97,13 @@ final class DatosUsuario
                 'total_points'         => $total,
                 'tier'                 => $tier,
                 'loyalty_card'         => $tarjeta,
-                'loyalty_campaign'     => null,
+                'loyalty_campaign'     => $campana,
             ],
             'balance'          => $saldo,
             'total_points'     => $total,
             'loyalty_card'     => $tarjeta,
-            // sm_clientes no guarda la campaña de la tarjeta. Se mantiene la
-            // clave para no romper la web.
-            'loyalty_campaign' => null,
+            // null en las tarjetas recibidas antes de guardar la campaña.
+            'loyalty_campaign' => $campana,
             'cupones'          => $customerId !== '' ? self::cupones($customerId) : [],
             'historial'        => $historial,
         ];

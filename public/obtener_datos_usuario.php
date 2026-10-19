@@ -39,7 +39,7 @@ declare(strict_types=1);
  * SALIDA
  * ------
  *   200 {"success": true, "datos": {"custom_attributes": {…}, "balance": …,
- *        "total_points": …, "loyalty_card": …, "loyalty_campaign": null,
+ *        "total_points": …, "loyalty_card": …, "loyalty_campaign": …,
  *        "cupones": [ … ], "historial": [ … ]}}
  *   400 {"success": false, "message": "Se requiere el email"}
  *   404 {"success": false, "message": "No se encontró ningún cliente con ese email"}

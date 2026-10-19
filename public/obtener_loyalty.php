@@ -105,21 +105,60 @@ responder(200, ['success' => true, 'rewards' => $rewards, 'tiers' => $tiers]);
  */
 function leerTiers(string $ruta): ?array
 {
-    if (!is_file($ruta) || !is_readable($ruta)) {
-        Log::warning('obtener_loyalty: fichero de tiers no encontrado o no legible', ['ruta' => $ruta]);
+    // Absoluta: /… en el servidor, o C:/… en un equipo Windows de desarrollo.
+    if (preg_match('#^([A-Za-z]:)?[/\\\\]#', $ruta) !== 1) {
+        // Una ruta relativa se resolvería contra el directorio de trabajo de
+        // PHP-FPM, no contra /opt/salesmanago.
+        Log::warning('obtener_loyalty: RUTA_TIERS_JSON debe ser una ruta absoluta (empezar por /)', ['ruta' => $ruta]);
 
         return null;
     }
 
-    $tramos = json_decode((string) file_get_contents($ruta), true);
+    if (!is_file($ruta)) {
+        Log::warning('obtener_loyalty: el fichero de tiers no existe', ['ruta' => $ruta]);
 
-    // Misma comprobación que ManejadorTierActualizado: una lista de objetos.
+        return null;
+    }
+
+    if (!is_readable($ruta)) {
+        Log::warning('obtener_loyalty: el usuario de PHP-FPM no puede leer el fichero de tiers', [
+            'ruta'    => $ruta,
+            'usuario' => function_exists('posix_geteuid') ? (posix_getpwuid(posix_geteuid())['name'] ?? '?') : '?',
+        ]);
+
+        return null;
+    }
+
+    $contenido = (string) file_get_contents($ruta);
+
+    // Un editor de Windows puede guardar el JSON con BOM, y json_decode no lo
+    // admite.
+    if (str_starts_with($contenido, "\xEF\xBB\xBF")) {
+        $contenido = substr($contenido, 3);
+    }
+
+    $tramos = json_decode($contenido, true);
+
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        Log::warning('obtener_loyalty: el fichero de tiers no es JSON válido', [
+            'ruta'  => $ruta,
+            'error' => json_last_error_msg(),
+        ]);
+
+        return null;
+    }
+
+    // Misma comprobación que ManejadorTierActualizado: una lista de objetos,
+    // [{"id":…,"name":…,"points":{…}}, …], no un objeto que la contenga.
     $esLista = is_array($tramos)
         && array_is_list($tramos)
         && array_filter($tramos, static fn (mixed $t): bool => !is_array($t)) === [];
 
     if (!$esLista) {
-        Log::warning('obtener_loyalty: el fichero de tiers no contiene una lista de tramos válida', ['ruta' => $ruta]);
+        Log::warning('obtener_loyalty: el fichero de tiers es JSON pero no una lista de tramos [ {...}, ... ]', [
+            'ruta' => $ruta,
+            'tipo' => is_array($tramos) ? (array_is_list($tramos) ? 'lista con elementos no válidos' : 'objeto') : get_debug_type($tramos),
+        ]);
 
         return null;
     }
