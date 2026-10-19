@@ -301,7 +301,7 @@ function registrarEnVoucherify(
     ?DateTimeImmutable $fechaNacimiento,
 ): string {
     $datos = [
-        'source_id' => $dni,
+        'source_id' => $email,
         'email'     => $email,
         'phone'     => $telefono,
         'name'      => $nombre,
