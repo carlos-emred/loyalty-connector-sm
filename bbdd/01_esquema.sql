@@ -264,6 +264,49 @@ CREATE INDEX IF NOT EXISTS ix_sm_movimientos_cliente_fecha
 
 
 -- ---------------------------------------------------------------------------
+-- sm_compras
+--
+-- Compras de SalesManago ya enviadas a Voucherify por ejecutar_compra.php
+-- (ManejadorCompra). Es lo que impide registrar dos veces la misma compra: el
+-- endpoint es público y puede llamarse las veces que sea, pero una compra con
+-- fila aquí no se vuelve a enviar.
+--
+-- clave identifica la compra: el eventId del evento PURCHASE de SalesManago o,
+-- si no lo trae, su externalId o un hash de contacto, fecha, importe,
+-- productos y cupón.
+--
+-- estado:
+--   registrada  Voucherify aceptó el pedido (sin cupón) o el canje (con cupón).
+--   rechazada   Voucherify lo rechazó (cupón agotado, caducado, datos no
+--               válidos). No se reintenta; el motivo queda en «motivo».
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS sm_compras (
+    id              bigserial   PRIMARY KEY,
+    cliente         text        NOT NULL,
+    clave           text        NOT NULL,
+    contact_id      text        NOT NULL,
+    fecha           timestamptz NOT NULL,
+    importe         integer     NOT NULL,
+    codigo_cupon    text,
+    estado          text        NOT NULL,
+    voucherify_id   text,
+    motivo          text,
+    creado_en       timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT uq_sm_compras_clave UNIQUE (cliente, clave),
+    CONSTRAINT ck_sm_compras_estado CHECK (estado IN ('registrada', 'rechazada'))
+);
+
+COMMENT ON TABLE  sm_compras IS 'Compras de SalesManago enviadas a Voucherify; evita registrarlas dos veces';
+COMMENT ON COLUMN sm_compras.clave IS 'Identificador de la compra en SalesManago (eventId, externalId o hash)';
+COMMENT ON COLUMN sm_compras.contact_id IS 'contactId de SalesManago';
+COMMENT ON COLUMN sm_compras.importe IS 'Importe de la compra en céntimos';
+COMMENT ON COLUMN sm_compras.codigo_cupon IS 'Código de descuento de la compra (detail5); NULL si no llevaba';
+COMMENT ON COLUMN sm_compras.voucherify_id IS 'Id del pedido (ord_...) o del canje (r_...) en Voucherify';
+
+
+-- ---------------------------------------------------------------------------
 -- Permisos
 --
 -- Mismo usuario que el conector de Blueshift. Se conceden explícitamente
@@ -272,5 +315,5 @@ CREATE INDEX IF NOT EXISTS ix_sm_movimientos_cliente_fecha
 -- ---------------------------------------------------------------------------
 
 GRANT USAGE ON SCHEMA loyalty TO loyalty_app;
-GRANT SELECT, INSERT, UPDATE ON sm_clientes, sm_eventos_pendientes, sm_cupones, sm_movimientos_puntos TO loyalty_app;
-GRANT USAGE ON SEQUENCE sm_clientes_id_seq, sm_eventos_pendientes_id_seq, sm_movimientos_puntos_id_seq TO loyalty_app;
+GRANT SELECT, INSERT, UPDATE ON sm_clientes, sm_eventos_pendientes, sm_cupones, sm_movimientos_puntos, sm_compras TO loyalty_app;
+GRANT USAGE ON SEQUENCE sm_clientes_id_seq, sm_eventos_pendientes_id_seq, sm_movimientos_puntos_id_seq, sm_compras_id_seq TO loyalty_app;

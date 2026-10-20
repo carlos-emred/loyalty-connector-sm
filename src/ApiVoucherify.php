@@ -9,10 +9,12 @@ use RuntimeException;
 /**
  * Cliente de la API de Voucherify.
  *
- * Cubre el alta de clientes (POST /v1/customers, registro_club.php) y las
+ * Cubre el alta de clientes (POST /v1/customers, registro_club.php), las
  * recompensas de un miembro (GET /v1/loyalties/members/{id}/rewards,
- * obtener_loyalty.php). Mismas credenciales que el conector de Blueshift
- * (X-App-Id y X-App-Token en cabecera), pero leídas del .env de este proyecto.
+ * obtener_loyalty.php) y el registro de compras (POST /v1/orders y
+ * POST /v1/redemptions, ManejadorCompra). Mismas credenciales que el conector
+ * de Blueshift (X-App-Id y X-App-Token en cabecera), pero leídas del .env de
+ * este proyecto.
  *
  * IDEMPOTENCIA
  * ------------
@@ -89,6 +91,81 @@ final class ApiVoucherify
         }
 
         return $respuesta->json;
+    }
+
+    /**
+     * Registra un pedido pagado sin cupón.
+     *
+     * Idempotente si el pedido lleva source_id: Voucherify actualiza el pedido
+     * existente en lugar de crear otro, así que se reintentan también las
+     * respuestas ambiguas.
+     *
+     * @param array<string,mixed> $pedido source_id, amount, items, customer, status
+     * @return array{rechazado: bool, id: ?string, motivo: ?string}
+     *
+     * @throws RuntimeException si Voucherify no responde o falla (5xx, 429)
+     */
+    public static function registrarPedido(array $pedido): array
+    {
+        return self::resultadoCompra(
+            Http::postJson(
+                url: self::base() . '/v1/orders',
+                payload: $pedido,
+                cabeceras: ['Accept: application/json', ...self::credenciales()],
+                reintentarAmbiguos: true,
+            ),
+            'id'
+        );
+    }
+
+    /**
+     * Canjea un cupón con su pedido.
+     *
+     * No es idempotente: un segundo canje gastaría otro uso del cupón. Por eso
+     * no se reintentan las respuestas ambiguas.
+     *
+     * @param array<string,mixed> $canje redeemables, customer, order
+     * @return array{rechazado: bool, id: ?string, motivo: ?string}
+     *
+     * @throws RuntimeException si Voucherify no responde o falla (5xx, 429)
+     */
+    public static function canjear(array $canje): array
+    {
+        return self::resultadoCompra(
+            Http::postJson(
+                url: self::base() . '/v1/redemptions',
+                payload: $canje,
+                cabeceras: ['Accept: application/json', ...self::credenciales()],
+                reintentarAmbiguos: false,
+            ),
+            'redemptions.0.id'
+        );
+    }
+
+    /**
+     * 2xx: registrado. 4xx (salvo 429): Voucherify lo rechaza y reintentar no
+     * lo va a cambiar (cupón agotado, caducado, datos no válidos). Lo demás es
+     * un fallo temporal y se lanza para que el worker reintente.
+     *
+     * @return array{rechazado: bool, id: ?string, motivo: ?string}
+     */
+    private static function resultadoCompra(Respuesta $respuesta, string $rutaId): array
+    {
+        if ($respuesta->ok()) {
+            $id = $respuesta->valor($rutaId) ?? $respuesta->valor('id');
+
+            return ['rechazado' => false, 'id' => is_string($id) ? $id : null, 'motivo' => null];
+        }
+
+        if ($respuesta->codigo >= 400 && $respuesta->codigo < 500 && $respuesta->codigo !== 429) {
+            return [
+                'rechazado' => true,
+                'id'        => null,
+                'motivo'    => preg_replace('/^ — /u', '', self::motivo($respuesta)) ?: $respuesta->resumen(),
+            ];
+        }
+
+        throw new RuntimeException('Voucherify no registró la compra: ' . $respuesta->resumen() . self::motivo($respuesta));
     }
 
     /**

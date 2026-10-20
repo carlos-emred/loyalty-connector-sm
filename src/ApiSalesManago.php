@@ -9,8 +9,8 @@ use RuntimeException;
 /**
  * Cliente de la API de SalesManago.
  *
- * Cubre contact/upsert (registro_club.php) y v2/contact/addContactExtEvent
- * (ManejadorCuponAsignado). Sustituye a las copias de curl sin timeout de los
+ * Cubre contact/upsert (registro_club.php), v2/contact/addContactExtEvent
+ * (ManejadorCuponAsignado) y contact/listById (ManejadorCompra). Sustituye a las copias de curl sin timeout de los
  * scripts originales y saca las credenciales del código al .env.
  *
  * AUTENTICACIÓN
@@ -113,6 +113,37 @@ final class ApiSalesManago
         ]);
 
         return is_string($eventId) && $eventId !== '' ? $eventId : null;
+    }
+
+    /**
+     * Ficha completa de un contacto por su id, con sus eventos externos
+     * (contactExtEvents), o null si SalesManago no lo conoce.
+     *
+     * Es una lectura: se reintentan también las respuestas ambiguas.
+     *
+     * @return array<string,mixed>|null
+     *
+     * @throws RuntimeException si SalesManago no responde o rechaza la consulta
+     */
+    public static function contactoPorId(string $contactId): ?array
+    {
+        $respuesta = Http::postJson(
+            url: self::base() . '/api/contact/listById',
+            payload: self::credenciales() + ['contactId' => [$contactId]],
+            cabeceras: ['Accept: application/json'],
+            reintentarAmbiguos: true,
+        );
+
+        if (!$respuesta->ok() || $respuesta->valor('success') !== true) {
+            throw new RuntimeException(
+                'SalesManago no devolvió el contacto: ' . $respuesta->resumen()
+                . self::motivo($respuesta->valor('message'))
+            );
+        }
+
+        $contactos = $respuesta->valor('contacts');
+
+        return is_array($contactos) && is_array($contactos[0] ?? null) ? $contactos[0] : null;
     }
 
     /**

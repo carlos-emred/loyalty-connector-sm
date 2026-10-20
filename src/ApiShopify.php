@@ -6,14 +6,16 @@ namespace SalesManago;
 
 use DateTimeImmutable;
 use DateTimeInterface;
+use RuntimeException;
 use SalesManago\Shopify\EspecificacionCupon;
 use SalesManago\Shopify\ResultadoCupon;
 
 /**
  * Cliente de la API REST de administración de Shopify.
  *
- * Solo cubre lo que necesita crear_cupon.php: comprobar si un código existe y
- * crear el cupón (regla de precio + código).
+ * Cubre lo que necesita crear_cupon.php (comprobar si un código existe y
+ * crear el cupón: regla de precio + código) y el precio de una variante
+ * (precioVariante, por GraphQL) para ManejadorCompra.
  * Copia adaptada de Loyalty\Ecommerce\ShopifyAdapter del conector de
  * Blueshift.
  *
@@ -225,6 +227,60 @@ final class ApiShopify
                 'resumen'  => $respuesta->resumen(),
             ]);
         }
+    }
+
+    /**
+     * Precio actual de una variante de producto, en céntimos, o null si el id
+     * no es de una variante o Shopify no la conoce (producto borrado). Ninguno
+     * de los dos casos mejora al reintentar.
+     *
+     * Por GraphQL, como v2/ejecutar_compra.php: la API REST de productos está
+     * igual de heredada y esta consulta solo necesita el permiso read_products.
+     *
+     * @param string $variante id numérico o gid://shopify/ProductVariant/…
+     *
+     * @throws RuntimeException si Shopify falla: es temporal y merece reintento
+     */
+    public static function precioVariante(string $variante): ?int
+    {
+        $variante = trim($variante);
+
+        $gid = match (true) {
+            ctype_digit($variante) => 'gid://shopify/ProductVariant/' . $variante,
+            preg_match('#^gid://shopify/ProductVariant/\d+$#', $variante) === 1 => $variante,
+            default => null,
+        };
+
+        if ($gid === null) {
+            return null;
+        }
+
+        $respuesta = Http::postJson(
+            url: self::url('graphql.json'),
+            payload: [
+                'query'     => 'query ($id: ID!) { productVariant(id: $id) { price } }',
+                'variables' => ['id' => $gid],
+            ],
+            cabeceras: self::cabeceras(),
+            // Es una consulta: repetirla no cambia nada.
+            reintentarAmbiguos: true,
+        );
+
+        self::vigilarVersion($respuesta);
+
+        if (!$respuesta->ok() || $respuesta->valor('errors') !== null) {
+            throw new RuntimeException(
+                'Shopify no devolvió el precio de la variante: ' . $respuesta->resumen() . ' — ' . self::errores($respuesta)
+            );
+        }
+
+        $precio = $respuesta->valor('data.productVariant.price');
+
+        if (!is_numeric($precio)) {
+            return null;
+        }
+
+        return (int) round((float) $precio * 100);
     }
 
     private static function euros(int $centimos): string

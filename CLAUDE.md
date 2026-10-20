@@ -6,7 +6,7 @@ Contexto del proyecto. Léelo antes de tocar nada.
 
 Versión para **SalesManago** del conector de Blueshift (`/opt/loyalty/repo`). Mismo esqueleto (`bootstrap`, `Config`, `Http`, `Log`, `Auth`, `Cors`, `Db`, cola en PostgreSQL y worker), mismas reglas: **las de su `CLAUDE.md` se aplican aquí igual**, en especial timeouts en todas las llamadas (`Http::postJson`), nada sensible en `public/`, nada se borra de la base y logs sin credenciales ni datos personales.
 
-Por ahora hay seis flujos:
+Por ahora hay siete flujos:
 
 | Fichero | Qué hace |
 |---|---|
@@ -16,6 +16,7 @@ Por ahora hay seis flujos:
 | `public/crear_cupon.php` | Síncrono, lo llama el storefront. Comprueba que el correo recibido tiene fila en `sm_clientes` (404 si no) y crea el cupón en Shopify (regla de precio + código, `ApiShopify`). No busca al cliente en Shopify, porque exigiría acceso al email de los clientes (datos protegidos de nivel 2), así que el cupón no queda restringido a un cliente. Todos los datos del cupón llegan en la petición: no consulta a Voucherify. 409 si el código ya existe |
 | `public/obtener_datos_usuario.php` | Síncrono, lo llama el storefront. Con el correo, devuelve de PostgreSQL (`Storefront\DatosUsuario`) los puntos, tier, tarjeta y campaña de la tarjeta de `sm_clientes`, los cupones de `sm_cupones` con estado `disponible` (y ya empezados) y el historial de `sm_movimientos_puntos` de los últimos 10 meses. No llama a ninguna API. Antes de leer, pasa a `canjeado` o `caducado` los cupones disponibles del cliente que ya no lo son; es su única escritura. La forma de la respuesta es la del script original y la web depende de ella. Sin datos personales en la respuesta: el endpoint responde a cualquiera que conozca un correo |
 | `public/obtener_loyalty.php` | Síncrono, lo llama el storefront. Con el `memberId`, pide a Voucherify las recompensas del miembro (`ApiVoucherify::recompensasMiembro`) y las devuelve tal cual, junto con los tiers leídos del fichero JSON `RUTA_TIERS_JSON`, como en el conector de Blueshift. 404 si Voucherify no conoce al miembro, 502 si falla. Si el fichero de tiers falta o no es válido, `tiers` va a null y las recompensas se devuelven igual. Todavía no hay webhook que mantenga el fichero: se actualiza a mano |
+| `public/webhooks/ejecutar_compra.php` | Webhook de SalesManago al entrar una compra. **Público: no pide credenciales**, solo valida el `contactId` (UUID) y encola `salesmanago.purchase`. El worker (`ManejadorCompra`) lee el contacto en SalesManago (`contact/listById`), toma sus eventos `PURCHASE` de las últimas `COMPRAS_VENTANA_HORAS` horas que no estén en `sm_compras`, pide a Shopify el precio de cada variante (GraphQL) y registra la compra en Voucherify: sin código (`detail5` vacío) como pedido pagado (`/v1/orders`, con `source_id` para que sea idempotente); con código, como canje (`/v1/redemptions`). Cada compra se anota en `sm_compras` y no se vuelve a enviar. nginx limita las peticiones por IP a este fichero |
 
 El id de Voucherify (`cust_...`) sale de la respuesta del alta en `registro_club.php`. Por eso no hay webhook `customer.created`: el antiguo `completar_usuario.php` se retiró. `sm_clientes` tiene también `tier`, `saldo_puntos` y `total_puntos`, y existe `sm_movimientos_puntos`; de momento ningún flujo los rellena.
 
@@ -30,6 +31,10 @@ Regla común a todo el proyecto:
 - `sm_cupones` no tiene columna `metadata`: los datos útiles están en columnas propias (`descripcion`, `image_url`, `product_id`, `category_id`, `category_name`, `solo_uno`, `minimo_compra`).
 - `crear_cupon.php` no lleva `quantity` a Shopify: la validez la decide Voucherify (ver Shopify).
 
+## Endpoints públicos
+
+`ejecutar_compra.php` es el único que no pide `X-Loyalty-Key`. Puede serlo porque de la petición solo toma el `contactId`: los datos de la compra se leen de SalesManago, cada compra se registra una sola vez (`sm_compras`), responde sin llamar a ninguna API y nginx limita las peticiones por IP (`limit_req` en `nginx-salesmanago.conf`). Un endpoint nuevo sin credenciales tiene que cumplir lo mismo: no fiarse de los datos de la petición, no poder repetir un efecto y no exponer datos personales.
+
 ## Convivencia con el conector de Blueshift
 
 Misma instancia EC2, **misma base** (`loyalty`) y mismo esquema (`loyalty`), mismo usuario `loyalty_app`. Todo lo demás va separado:
@@ -42,7 +47,7 @@ Misma instancia EC2, **misma base** (`loyalty`) y mismo esquema (`loyalty`), mis
 | Pool PHP-FPM | `loyalty.sock` | `salesmanago.sock` |
 | Worker | `loyalty-worker` | `salesmanago-worker` |
 | Logs | `/var/log/loyalty/` | `/var/log/salesmanago/` |
-| Tablas | `clientes`, `eventos_pendientes`... | `sm_clientes`, `sm_eventos_pendientes`, `sm_cupones`, `sm_movimientos_puntos` |
+| Tablas | `clientes`, `eventos_pendientes`... | `sm_clientes`, `sm_eventos_pendientes`, `sm_cupones`, `sm_movimientos_puntos`, `sm_compras` |
 | Espacio de nombres PHP | `Loyalty\` | `SalesManago\` |
 
 **Prefijo `sm_` obligatorio** en toda tabla, índice y restricción nuevos: en PostgreSQL los nombres de índice son únicos por esquema. Desde aquí no se lee ni se escribe ninguna tabla del conector de Blueshift.
@@ -87,4 +92,5 @@ En Voucherify, dos webhooks **nuevos**: `voucher.published` hacia `https://<domi
 
 - `forceOptIn` y `forceOptOut` (y los de teléfono) van los dos a `true`, como en el script original. Son contradictorios: confirmar con marketing el estado que debe quedar.
 - Dominio definitivo en `nginx-salesmanago.conf`.
+- Si Voucherify rechaza el canje de una compra con cupón (agotado, caducado...), `ManejadorCompra` la deja como `rechazada` y no la registra como pedido sin cupón, así que el cliente no suma los puntos de esa compra. Confirmar si debe registrarse igualmente como pedido.
 - `crear_cupon.php` crea en Shopify el descuento que se le pida, y su secreto es público porque lo llama el navegador. Falta una protección real (firma del App Proxy de Shopify o comprobar el código contra `sm_cupones`).

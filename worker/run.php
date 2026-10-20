@@ -35,6 +35,7 @@ require_once __DIR__ . '/../bootstrap.php';
 use SalesManago\Config;
 use SalesManago\Db;
 use SalesManago\Eventos\Despachador;
+use SalesManago\Eventos\ManejadorCompra;
 use SalesManago\Eventos\ManejadorCuponAsignado;
 use SalesManago\Eventos\ManejadorCuponConsumido;
 use SalesManago\Log;
@@ -56,14 +57,16 @@ $unaVez = in_array('--una-vez', $argv, true);
 // -----------------------------------------------------------------------------
 // Manejadores
 // -----------------------------------------------------------------------------
-// voucher.published (webhooks/anadir_cupon.php) y redemption.succeeded
-// (webhooks/consumir_cupon.php). Un evento de otro tipo que llegue a la cola
+// voucher.published (webhooks/anadir_cupon.php), redemption.succeeded
+// (webhooks/consumir_cupon.php) y salesmanago.purchase
+// (webhooks/ejecutar_compra.php). Un evento de otro tipo que llegue a la cola
 // se descarta. Añadir un tipo es registrar aquí
 // su manejador: el bucle de abajo no sabe nada de tipos de evento.
 
 $despachador = new Despachador();
 $despachador->registrar(new ManejadorCuponAsignado());
 $despachador->registrar(new ManejadorCuponConsumido());
+$despachador->registrar(new ManejadorCompra());
 
 // -----------------------------------------------------------------------------
 // Señales
