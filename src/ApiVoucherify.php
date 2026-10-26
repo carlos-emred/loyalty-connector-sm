@@ -11,8 +11,10 @@ use RuntimeException;
  *
  * Cubre el alta de clientes (POST /v1/customers, registro_club.php), las
  * recompensas de un miembro (GET /v1/loyalties/members/{id}/rewards,
- * obtener_loyalty.php) y el registro de compras (POST /v1/orders y
- * POST /v1/redemptions, ManejadorCompra). Mismas credenciales que el conector
+ * obtener_loyalty.php), el registro de compras (POST /v1/orders y
+ * POST /v1/redemptions, ManejadorCompra) y el canje de puntos por una
+ * recompensa (POST /v1/loyalties/{campaña}/members/{miembro}/redemption,
+ * adquirir_recompensa.php). Mismas credenciales que el conector
  * de Blueshift (X-App-Id y X-App-Token en cabecera), pero leídas del .env de
  * este proyecto.
  *
@@ -139,6 +141,38 @@ final class ApiVoucherify
                 reintentarAmbiguos: false,
             ),
             'redemptions.0.id'
+        );
+    }
+
+    /**
+     * Canjea puntos de un miembro por una recompensa.
+     *
+     * Devuelve la respuesta tal cual: adquirir_recompensa.php la reenvía a la
+     * tienda, que lee de ahí el resultado (o el motivo del rechazo).
+     *
+     * Gasta puntos, así que no se reintentan las respuestas ambiguas: si la
+     * petición llegó, repetirla podría canjear dos veces. Http solo reintenta
+     * cuando la petición no llegó a salir (DNS, conexión) o Voucherify la
+     * rechazó sin procesarla (429, 503).
+     *
+     * @param int|null $puntos Solo cuenta en las recompensas de «pagar con
+     *                         puntos»; en las demás Voucherify usa el coste
+     *                         configurado en la recompensa
+     */
+    public static function canjearRecompensa(string $campanaId, string $memberId, string $rewardId, ?int $puntos): Respuesta
+    {
+        $recompensa = ['id' => $rewardId];
+
+        if ($puntos !== null) {
+            $recompensa['points'] = $puntos;
+        }
+
+        return Http::postJson(
+            url: self::base() . '/v1/loyalties/' . rawurlencode($campanaId)
+                . '/members/' . rawurlencode($memberId) . '/redemption',
+            payload: ['reward' => $recompensa],
+            cabeceras: ['Accept: application/json', ...self::credenciales()],
+            reintentarAmbiguos: false,
         );
     }
 
