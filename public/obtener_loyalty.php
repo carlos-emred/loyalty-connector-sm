@@ -21,8 +21,8 @@ declare(strict_types=1);
  *
  *   [{"id":"ltr_…","name":"Plata","points":{"from":250,"to":750}}, …]
  *
- * points.to puede ser null en el tramo superior. En este conector todavía no
- * hay webhook que lo mantenga: se actualiza a mano. Si falta o no es válido,
+ * points.to puede ser null en el tramo superior. Lo mantiene
+ * webhooks/modificar_tiers.php (ManejadorTierActualizado). Si falta o no es válido,
  * tiers va a null y queda aviso en el log; las recompensas se devuelven igual.
  *
  * DIFERENCIAS CON EL SCRIPT ORIGINAL

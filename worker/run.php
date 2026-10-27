@@ -39,6 +39,7 @@ use SalesManago\Eventos\ManejadorCompra;
 use SalesManago\Eventos\ManejadorCuponAsignado;
 use SalesManago\Eventos\ManejadorCuponConsumido;
 use SalesManago\Eventos\ManejadorMovimientoPuntos;
+use SalesManago\Eventos\ManejadorTierActualizado;
 use SalesManago\Log;
 
 Log::fijarCanal('worker');
@@ -60,8 +61,9 @@ $unaVez = in_array('--una-vez', $argv, true);
 // -----------------------------------------------------------------------------
 // voucher.published (webhooks/anadir_cupon.php), redemption.succeeded
 // (webhooks/consumir_cupon.php), salesmanago.purchase
-// (webhooks/ejecutar_compra.php) y voucher.loyalty_card.transaction.created
-// (webhooks/anadir_puntos.php). Un evento de otro tipo que llegue a la cola
+// (webhooks/ejecutar_compra.php), voucher.loyalty_card.transaction.created
+// (webhooks/anadir_puntos.php) y campaign.loyalty_tier.updated
+// (webhooks/modificar_tiers.php). Un evento de otro tipo que llegue a la cola
 // se descarta. Añadir un tipo es registrar aquí
 // su manejador: el bucle de abajo no sabe nada de tipos de evento.
 
@@ -70,6 +72,7 @@ $despachador->registrar(new ManejadorCuponAsignado());
 $despachador->registrar(new ManejadorCuponConsumido());
 $despachador->registrar(new ManejadorCompra());
 $despachador->registrar(new ManejadorMovimientoPuntos());
+$despachador->registrar(new ManejadorTierActualizado());
 
 // -----------------------------------------------------------------------------
 // Señales
