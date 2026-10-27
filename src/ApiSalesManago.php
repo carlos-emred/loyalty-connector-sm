@@ -9,7 +9,7 @@ use RuntimeException;
 /**
  * Cliente de la API de SalesManago.
  *
- * Cubre contact/upsert (registro_club.php), v2/contact/addContactExtEvent
+ * Cubre contact/upsert (registro_club.php y ManejadorMovimientoPuntos), v2/contact/addContactExtEvent
  * (ManejadorCuponAsignado) y contact/listById (ManejadorCompra). Sustituye a las copias de curl sin timeout de los
  * scripts originales y saca las credenciales del código al .env.
  *

@@ -110,8 +110,9 @@ final class DatosUsuario
     }
 
     /**
-     * Saldo y total de sm_clientes. Si aún no están (ningún flujo los rellena
-     * todavía), los del último movimiento; sin movimientos, 0.
+     * Saldo y total de sm_clientes. Si aún no están (el socio no ha tenido
+     * movimientos desde que se registró), los del último movimiento; sin
+     * movimientos, 0.
      *
      * @param array<string,mixed> $cliente
      * @return array{0: int, 1: int}

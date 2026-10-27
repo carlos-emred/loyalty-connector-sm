@@ -6,7 +6,7 @@ Contexto del proyecto. Léelo antes de tocar nada.
 
 Versión para **SalesManago** del conector de Blueshift (`/opt/loyalty/repo`). Mismo esqueleto (`bootstrap`, `Config`, `Http`, `Log`, `Auth`, `Cors`, `Db`, cola en PostgreSQL y worker), mismas reglas: **las de su `CLAUDE.md` se aplican aquí igual**, en especial timeouts en todas las llamadas (`Http::postJson`), nada sensible en `public/`, nada se borra de la base y logs sin credenciales ni datos personales.
 
-Por ahora hay ocho flujos:
+Por ahora hay nueve flujos:
 
 | Fichero | Qué hace |
 |---|---|
@@ -17,9 +17,10 @@ Por ahora hay ocho flujos:
 | `public/obtener_datos_usuario.php` | Síncrono, lo llama el storefront. Con el correo, devuelve de PostgreSQL (`Storefront\DatosUsuario`) los puntos, tier, tarjeta y campaña de la tarjeta de `sm_clientes`, los cupones de `sm_cupones` con estado `disponible` (y ya empezados) y el historial de `sm_movimientos_puntos` de los últimos 10 meses. No llama a ninguna API. Antes de leer, pasa a `canjeado` o `caducado` los cupones disponibles del cliente que ya no lo son; es su única escritura. La forma de la respuesta es la del script original y la web depende de ella. Sin datos personales en la respuesta: el endpoint responde a cualquiera que conozca un correo |
 | `public/obtener_loyalty.php` | Síncrono, lo llama el storefront. Con el `memberId`, pide a Voucherify las recompensas del miembro (`ApiVoucherify::recompensasMiembro`) y las devuelve tal cual, junto con los tiers leídos del fichero JSON `RUTA_TIERS_JSON`, como en el conector de Blueshift. 404 si Voucherify no conoce al miembro, 502 si falla. Si el fichero de tiers falta o no es válido, `tiers` va a null y las recompensas se devuelven igual. Todavía no hay webhook que mantenga el fichero: se actualiza a mano |
 | `public/adquirir_recompensa.php` | Síncrono, lo llama el storefront. Con `campaignId`, `memberId`, `rewardId` y `rewardPoints`, canjea los puntos del miembro por la recompensa en Voucherify (`ApiVoucherify::canjearRecompensa`, `/v1/loyalties/{campaña}/members/{miembro}/redemption`) y devuelve la respuesta de Voucherify tal cual, con su código. No escribe en la base: si la recompensa es un cupón, llega después por `anadir_cupon.php`. No reintenta si la petición pudo llegar (gasta puntos). El `memberId` no se escribe entero en el log |
+| `public/webhooks/anadir_puntos.php` | Webhook `voucher.loyalty_card.transaction.created` de Voucherify (movimiento de puntos). Encola en `sm_eventos_pendientes`; el worker (`ManejadorMovimientoPuntos`) guarda el movimiento en `sm_movimientos_puntos` (único por `transaction_id`), actualiza `saldo_puntos`, `total_puntos` y `tier` del socio en `sm_clientes` (por `voucherify_id`) salvo que haya un movimiento posterior, y hace upsert de las propiedades `balance`, `total_points` y `tier` en su contacto de SalesManago. El tier sale de `holder_loyalty_tier` del payload. Si el cliente no está en `sm_clientes`, solo se guarda el movimiento |
 | `public/webhooks/ejecutar_compra.php` | Webhook de SalesManago al entrar una compra. **Público: no pide credenciales**, solo valida el `contactId` (UUID) y encola `salesmanago.purchase`. El worker (`ManejadorCompra`) lee el contacto en SalesManago (`contact/listById`), toma sus eventos `PURCHASE` de las últimas `COMPRAS_VENTANA_HORAS` horas que no estén en `sm_compras`, pide a Shopify el precio de cada variante (GraphQL) y registra la compra en Voucherify: sin código (`detail5` vacío) como pedido pagado (`/v1/orders`, con `source_id` para que sea idempotente); con código, como canje (`/v1/redemptions`). Cada compra se anota en `sm_compras` y no se vuelve a enviar. nginx limita las peticiones por IP a este fichero |
 
-El id de Voucherify (`cust_...`) sale de la respuesta del alta en `registro_club.php`. Por eso no hay webhook `customer.created`: el antiguo `completar_usuario.php` se retiró. `sm_clientes` tiene también `tier`, `saldo_puntos` y `total_puntos`, y existe `sm_movimientos_puntos`; de momento ningún flujo los rellena.
+El id de Voucherify (`cust_...`) sale de la respuesta del alta en `registro_club.php`. Por eso no hay webhook `customer.created`: el antiguo `completar_usuario.php` se retiró. `tier`, `saldo_puntos` y `total_puntos` de `sm_clientes` y la tabla `sm_movimientos_puntos` los rellena `anadir_puntos.php`.
 
 ## Cupones: usos y estado
 
@@ -60,7 +61,7 @@ La cola es propia a propósito: si los dos conectores reciben el mismo evento de
 - Las credenciales van en el cuerpo de la petición, no en cabecera. El cuerpo nunca se escribe en el log.
 - Responde 200 también cuando rechaza: se comprueba `success` (`ApiSalesManago::upsertContacto`).
 - `registro_club.php` no reintenta respuestas ambiguas: con `useApiDoubleOptIn` un segundo upsert podría enviar otra vez el correo de confirmación.
-- Los nombres de `properties` (`dni`, `genero`, `voucherifyId`) son los de los scripts originales y las segmentaciones dependen de ellos. No se renombran.
+- Los nombres de `properties` (`dni`, `genero`, `voucherifyId`; `balance`, `total_points` y `tier` en `anadir_puntos.php`) son los de los scripts originales y las segmentaciones dependen de ellos. No se renombran.
 - Las posiciones `detail1`..`detail10` del evento externo del cupón son las del script original (`v2/webhooks/añadir_cupon.php`) y la plantilla del correo se apoya en ellas. No se mueven. El código del cupón va en `detail11`, porque `value` es numérico en SalesManago.
 - El evento externo tampoco reintenta respuestas ambiguas: cada evento es un correo.
 
@@ -87,7 +88,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now salesmanago-worker
 sudo systemctl reload php-fpm nginx
 ```
 
-En Voucherify, dos webhooks **nuevos**: `voucher.published` hacia `https://<dominio>/webhooks/anadir_cupon.php` y `redemption.succeeded` hacia `https://<dominio>/webhooks/consumir_cupon.php`, los dos con la cabecera `X-Loyalty-Key` y el `CONECTOR_SECRETO` de este `.env`. El webhook del conector de Blueshift no se toca.
+En Voucherify, tres webhooks **nuevos**: `voucher.published` hacia `https://<dominio>/webhooks/anadir_cupon.php`, `redemption.succeeded` hacia `https://<dominio>/webhooks/consumir_cupon.php` y `voucher.loyalty_card.transaction.created` hacia `https://<dominio>/webhooks/anadir_puntos.php`, los tres con la cabecera `X-Loyalty-Key` y el `CONECTOR_SECRETO` de este `.env`. El webhook del conector de Blueshift no se toca.
 
 ## Pendiente de confirmar
 
