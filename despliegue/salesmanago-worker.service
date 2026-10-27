@@ -31,7 +31,11 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/log/salesmanago
+# Con ProtectSystem=strict todo es de solo lectura salvo lo que se lista aquí.
+# datos/ es donde ManejadorTierActualizado reescribe tiers.json (RUTA_TIERS_JSON);
+# si se cambia esa ruta, hay que cambiar también esta línea. El «-» evita que
+# el servicio no arranque si el directorio aún no existe.
+ReadWritePaths=/var/log/salesmanago -/opt/salesmanago/datos
 
 [Install]
 WantedBy=multi-user.target

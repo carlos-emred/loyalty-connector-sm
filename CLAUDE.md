@@ -77,8 +77,8 @@ La cola es propia a propósito: si los dos conectores reciben el mismo evento de
 
 ```bash
 sudo useradd --system --home /opt/salesmanago --shell /sbin/nologin salesmanago
-sudo mkdir -p /opt/salesmanago /var/log/salesmanago
-sudo chown salesmanago:salesmanago /opt/salesmanago /var/log/salesmanago
+sudo mkdir -p /opt/salesmanago/datos /var/log/salesmanago
+sudo chown salesmanago:salesmanago /opt/salesmanago /opt/salesmanago/datos /var/log/salesmanago
 sudo -u salesmanago git clone <repo> /opt/salesmanago/repo
 # .env a partir de .env.ejemplo, propiedad de salesmanago y modo 600
 sudo cat /opt/salesmanago/repo/bbdd/01_esquema.sql | sudo -u postgres psql -d loyalty
