@@ -6,13 +6,14 @@ Contexto del proyecto. Léelo antes de tocar nada.
 
 Versión para **SalesManago** del conector de Blueshift (`/opt/loyalty/repo`). Mismo esqueleto (`bootstrap`, `Config`, `Http`, `Log`, `Auth`, `Cors`, `Db`, cola en PostgreSQL y worker), mismas reglas: **las de su `CLAUDE.md` se aplican aquí igual**, en especial timeouts en todas las llamadas (`Http::postJson`), nada sensible en `public/`, nada se borra de la base y logs sin credenciales ni datos personales.
 
-Por ahora hay diez flujos:
+Por ahora hay once flujos:
 
 | Fichero | Qué hace |
 |---|---|
 | `public/registro_club.php` | Síncrono. Recibe el formulario del storefront, valida la contraseña, responde 409 si el correo ya tiene un registro completado (`sincronizado_en` no nulo), guarda al usuario en `sm_clientes` (contraseña solo como hash en `password_hash`), hace upsert del cliente en Voucherify (`source_id` = DNI) y después del contacto en SalesManago con su `voucherifyId` |
 | `public/webhooks/anadir_cupon.php` | Webhook `voucher.published` de Voucherify (cupón asignado a un cliente). Encola en `sm_eventos_pendientes`; el worker (`ManejadorCuponAsignado`) guarda el cupón en `sm_cupones` y lanza un evento externo (`detail1` = `COMUNICAR_CUPON`) en el contacto de SalesManago, que dispara el correo. `notificado_en` impide enviarlo dos veces. Las tarjetas de fidelización (`LOYALTY_CARD`) solo se guardan en `sm_clientes`: el código en `loyalty_card` y su `campaign_id` en `loyalty_campaign`; ni `sm_cupones` ni SalesManago |
 | `public/webhooks/consumir_cupon.php` | Webhook `redemption.succeeded` de Voucherify (cupón canjeado). Encola en `sm_eventos_pendientes`; el worker (`ManejadorCuponConsumido`) actualiza los usos del cupón en `sm_cupones` con el `redeemed_quantity` del payload (no suma uno). El cupón no se borra: al agotar sus usos pasa a estado `canjeado`. No avisa a nadie |
+| `public/webhooks/eliminar_cupon.php` | Webhook `voucher.deleted` de Voucherify (cupón borrado). Encola en `sm_eventos_pendientes`; el worker (`ManejadorCuponEliminado`) pasa el cupón a estado `eliminado` en `sm_cupones` para que deje de ofrecerse. No borra la fila. Un cupón `canjeado` conserva su estado; las tarjetas de fidelización se ignoran. No avisa a nadie |
 | `public/crear_cupon.php` | Síncrono, lo llama el storefront. Comprueba que el correo recibido tiene fila en `sm_clientes` (404 si no) y crea el cupón en Shopify (regla de precio + código, `ApiShopify`). No busca al cliente en Shopify, porque exigiría acceso al email de los clientes (datos protegidos de nivel 2), así que el cupón no queda restringido a un cliente. Todos los datos del cupón llegan en la petición: no consulta a Voucherify. 409 si el código ya existe |
 | `public/obtener_datos_usuario.php` | Síncrono, lo llama el storefront. Con el correo, devuelve de PostgreSQL (`Storefront\DatosUsuario`) los puntos, tier, tarjeta y campaña de la tarjeta de `sm_clientes`, los cupones de `sm_cupones` con estado `disponible` (y ya empezados) y el historial de `sm_movimientos_puntos` de los últimos 10 meses. No llama a ninguna API. Antes de leer, pasa a `canjeado` o `caducado` los cupones disponibles del cliente que ya no lo son; es su única escritura. La forma de la respuesta es la del script original y la web depende de ella. Sin datos personales en la respuesta: el endpoint responde a cualquiera que conozca un correo |
 | `public/obtener_loyalty.php` | Síncrono, lo llama el storefront. Con el `memberId`, pide a Voucherify las recompensas del miembro (`ApiVoucherify::recompensasMiembro`) y las devuelve tal cual, junto con los tiers leídos del fichero JSON `RUTA_TIERS_JSON`, como en el conector de Blueshift. 404 si Voucherify no conoce al miembro, 502 si falla. Si el fichero de tiers falta o no es válido, `tiers` va a null y las recompensas se devuelven igual. Lo mantiene `modificar_tiers.php` |
@@ -28,8 +29,8 @@ El id de Voucherify (`cust_...`) sale de la respuesta del alta en `registro_club
 Regla común a todo el proyecto:
 
 - `quantity` es el número de veces que se puede consumir un cupón; `redeemed_quantity`, las veces que ya se ha consumido. Cuando son iguales, el cupón no se puede consumir más. `quantity` nulo es «usos ilimitados» en Voucherify: nunca se agota.
-- `sm_cupones.estado` dice si un cupón está disponible: `disponible`, `canjeado` (usos agotados) o `caducado` (pasó `fecha_caducidad`). Solo se ofrecen los `disponible`. Nada se borra: un cupón deja de ofrecerse cambiando de estado, y nunca vuelve a `disponible`.
-- Quién cambia el estado: `ManejadorCuponConsumido` (canjeado al agotarse), `ManejadorCuponAsignado` (si el cupón ya llega agotado o caducado) y `obtener_datos_usuario.php` (al consultar, los que ya no son válidos).
+- `sm_cupones.estado` dice si un cupón está disponible: `disponible`, `canjeado` (usos agotados), `caducado` (pasó `fecha_caducidad`) o `eliminado` (borrado en Voucherify). Solo se ofrecen los `disponible`. Nada se borra: un cupón deja de ofrecerse cambiando de estado, y nunca vuelve a `disponible`.
+- Quién cambia el estado: `ManejadorCuponConsumido` (canjeado al agotarse), `ManejadorCuponAsignado` (si el cupón ya llega agotado o caducado) `obtener_datos_usuario.php` (al consultar, los que ya no son válidos) y `ManejadorCuponEliminado` (eliminado, salvo si ya estaba canjeado).
 - `redeemed_quantity` sale siempre del payload de Voucherify y nunca retrocede (`GREATEST`).
 - `sm_cupones` no tiene columna `metadata`: los datos útiles están en columnas propias (`descripcion`, `image_url`, `product_id`, `category_id`, `category_name`, `solo_uno`, `minimo_compra`).
 - `crear_cupon.php` no lleva `quantity` a Shopify: la validez la decide Voucherify (ver Shopify).
@@ -89,7 +90,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now salesmanago-worker
 sudo systemctl reload php-fpm nginx
 ```
 
-En Voucherify, cuatro webhooks **nuevos**: `voucher.published` hacia `https://<dominio>/webhooks/anadir_cupon.php`, `redemption.succeeded` hacia `https://<dominio>/webhooks/consumir_cupon.php` `voucher.loyalty_card.transaction.created` hacia `https://<dominio>/webhooks/anadir_puntos.php` y `campaign.loyalty_tier.updated` hacia `https://<dominio>/webhooks/modificar_tiers.php`, los cuatro con la cabecera `X-Loyalty-Key` y el `CONECTOR_SECRETO` de este `.env`. El webhook del conector de Blueshift no se toca.
+En Voucherify, cinco webhooks **nuevos**: `voucher.published` hacia `https://<dominio>/webhooks/anadir_cupon.php`, `redemption.succeeded` hacia `https://<dominio>/webhooks/consumir_cupon.php`, `voucher.deleted` hacia `https://<dominio>/webhooks/eliminar_cupon.php`, `voucher.loyalty_card.transaction.created` hacia `https://<dominio>/webhooks/anadir_puntos.php` y `campaign.loyalty_tier.updated` hacia `https://<dominio>/webhooks/modificar_tiers.php`, los cinco con la cabecera `X-Loyalty-Key` y el `CONECTOR_SECRETO` de este `.env`. El webhook del conector de Blueshift no se toca.
 
 ## Pendiente de confirmar
 

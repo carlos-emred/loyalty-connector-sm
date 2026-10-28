@@ -156,6 +156,8 @@ CREATE INDEX IF NOT EXISTS ix_sm_eventos_fallidos
 --               o ManejadorCuponAsignado si ya llegó agotado).
 --   caducado    pasó su fecha_caducidad (lo marca obtener_datos_usuario.php
 --               al consultar, o ManejadorCuponAsignado si ya llegó caducado).
+--   eliminado   se borró en Voucherify (ManejadorCuponEliminado). Un cupón
+--               canjeado conserva su estado.
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS sm_cupones (
@@ -194,7 +196,7 @@ CREATE TABLE IF NOT EXISTS sm_cupones (
 
     CONSTRAINT uq_sm_cupones_codigo UNIQUE (cliente, codigo),
     CONSTRAINT ck_sm_cupones_tipo CHECK (tipo IN ('AMOUNT', 'PERCENT', 'SHIPPING', 'UNIT')),
-    CONSTRAINT ck_sm_cupones_estado CHECK (estado IN ('disponible', 'canjeado', 'caducado'))
+    CONSTRAINT ck_sm_cupones_estado CHECK (estado IN ('disponible', 'canjeado', 'caducado', 'eliminado'))
 );
 
 COMMENT ON TABLE  sm_cupones IS 'Cupones asignados a cada cliente; sustituye a cupones/*.json';
@@ -205,7 +207,7 @@ COMMENT ON COLUMN sm_cupones.producto IS 'Nombre del producto regalado si UNIT';
 COMMENT ON COLUMN sm_cupones.importe_maximo IS 'discount.amount_limit de Voucherify, en céntimos';
 COMMENT ON COLUMN sm_cupones.quantity IS 'Veces que se puede consumir. NULL en Voucherify significa ilimitado';
 COMMENT ON COLUMN sm_cupones.redeemed_quantity IS 'Veces que se ha consumido. Igual a quantity: no se puede consumir más';
-COMMENT ON COLUMN sm_cupones.estado IS 'disponible, canjeado o caducado; el cupón solo se ofrece si está disponible';
+COMMENT ON COLUMN sm_cupones.estado IS 'disponible, canjeado, caducado o eliminado; el cupón solo se ofrece si está disponible';
 COMMENT ON COLUMN sm_cupones.descripcion_corta IS 'Descripción de la campaña (data.campaign.description)';
 COMMENT ON COLUMN sm_cupones.notificado_en IS 'Momento en que se lanzó el evento externo en SalesManago; NULL si aún no';
 
