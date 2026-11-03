@@ -19,18 +19,26 @@ use SalesManago\RecepcionCuponGenerico;
  *      Voucherify.
  *   3. Guarda el cupón en sm_cupones para ese socio, marcado como genérico.
  *      obtener_datos_usuario.php lo devuelve como cualquier otro.
+ *   4. Lanza en su contacto el mismo evento externo que un cupón propio
+ *      (detail1 = COMUNICAR_CUPON, RegistroCupon::notificar), que dispara el
+ *      correo.
  *
  * No toca Voucherify: un cupón genérico tiene el mismo código para todos y no
  * se publica a nadie. Voucherify lo valida al aplicarlo, como siempre.
  *
- * No avisa a SalesManago: quien llama es una regla de SalesManago, que puede
- * mandar el correo ella misma.
+ * UN SOLO CORREO POR SOCIO
+ * ------------------------
+ * Si el socio ya tenía el cupón, la fila no se toca, pero se avisa si aún no
+ * se había avisado (notificado_en nulo). Así un reintento tras un fallo de
+ * SalesManago sí manda el correo, y una segunda llamada de la regla no lo
+ * repite.
  *
  * SIN EXCEPCIONES SALVO FALLO DE SALESMANAGO
  * ------------------------------------------
  * Un contacto que SalesManago no conoce, sin correo o que no está registrado
  * en el club no mejora al reintentarlo: se registra y se termina. Si
- * SalesManago falla, contactoPorId() lanza y el worker reintenta.
+ * SalesManago falla (al leer el contacto o al lanzar el evento), se lanza
+ * excepción y el worker reintenta.
  */
 final class ManejadorCuponGenerico implements ManejadorEvento
 {
@@ -83,6 +91,9 @@ final class ManejadorCuponGenerico implements ManejadorEvento
             return;
         }
 
+        // cuponValido() ya comprobó que el tipo es conocido.
+        $descuento = RegistroCupon::clasificarDescuento($voucher) ?? [];
+
         $yaLoTenia = Db::valor(
             'SELECT estado FROM sm_cupones WHERE cliente = :cli AND customer_id = :customer AND voucher_id = :voucher',
             ['cli' => Db::cliente(), 'customer' => $customerId, 'voucher' => $voucherId]
@@ -90,21 +101,13 @@ final class ManejadorCuponGenerico implements ManejadorEvento
 
         if ($yaLoTenia !== null) {
             Log::info('El socio ya tenía el cupón genérico; no se cambia', $contexto + ['estado' => $yaLoTenia]);
+        } else {
+            RegistroCupon::guardar($voucher, $cupon, $voucherId, $codigo, $customerId, $descuento, generico: true);
 
-            return;
+            Log::info('Cupón genérico asignado', $contexto + ['customer' => $customerId]);
         }
 
-        RegistroCupon::guardar(
-            $voucher,
-            $cupon,
-            $voucherId,
-            $codigo,
-            $customerId,
-            // cuponValido() ya comprobó que el tipo es conocido.
-            RegistroCupon::clasificarDescuento($voucher) ?? [],
-            generico: true,
-        );
-
-        Log::info('Cupón genérico asignado', $contexto + ['customer' => $customerId]);
+        // No repite el correo si notificado_en ya está puesto.
+        RegistroCupon::notificar($voucher, $cupon, $email, $voucherId, $codigo, $customerId, $descuento);
     }
 }

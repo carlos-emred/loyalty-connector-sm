@@ -4,14 +4,17 @@ declare(strict_types=1);
 
 namespace SalesManago\Eventos;
 
+use SalesManago\ApiSalesManago;
 use SalesManago\Db;
+use SalesManago\Log;
 
 /**
- * Guarda en sm_cupones un cupón de Voucherify asignado a un cliente.
+ * Guarda en sm_cupones un cupón de Voucherify asignado a un cliente y lanza el
+ * evento externo de SalesManago que envía el correo.
  *
  * Lo comparten ManejadorCuponAsignado (voucher.published, cupón propio del
  * cliente) y ManejadorCuponGenerico (cupón genérico asignado desde
- * SalesManago), para que los dos traduzcan el cupón exactamente igual.
+ * SalesManago), para que los dos traduzcan el cupón y avisen exactamente igual.
  *
  * UNA FILA POR CLIENTE Y CUPÓN
  * ----------------------------
@@ -22,6 +25,9 @@ use SalesManago\Db;
  */
 final class RegistroCupon
 {
+    /** Valor de detail1 con el que la automatización de SalesManago reconoce el evento. */
+    private const MARCA_EVENTO = 'COMUNICAR_CUPON';
+
     /**
      * Tipo y valor del cupón, con los mismos criterios que el original
      * (v2/webhooks/añadir_cupon.php). Se calculan una sola vez para la base y
@@ -159,6 +165,96 @@ final class RegistroCupon
                 'creado'            => $voucher['created_at'] ?? null,
                 'estado'            => self::estadoInicial($quantity, $canjeados, $caducidad),
             ]
+        );
+    }
+
+    /**
+     * Lanza el evento externo (detail1 = COMUNICAR_CUPON) en el contacto de
+     * SalesManago, que es lo que dispara el correo, y marca notificado_en.
+     *
+     * SIN CORREOS DUPLICADOS
+     * ----------------------
+     * Cada evento externo es un correo. Antes de lanzarlo se mira
+     * sm_cupones.notificado_en, y se escribe justo después: un reproceso no lo
+     * reenvía. Queda una ventana de milisegundos (el proceso muere entre la
+     * respuesta de SalesManago y el UPDATE), la misma que acepta el conector
+     * de Blueshift.
+     *
+     * @param array<string,mixed> $voucher
+     * @param array<string,mixed> $datos   Lo que acompaña al voucher; se usa campaign
+     * @param array{tipo: string, valor: ?int, producto: ?string} $descuento De clasificarDescuento()
+     *
+     * @throws \RuntimeException si SalesManago no confirma; el worker reintenta
+     */
+    public static function notificar(
+        array $voucher,
+        array $datos,
+        string $email,
+        string $voucherId,
+        string $codigo,
+        string $customerId,
+        array $descuento,
+    ): void {
+        $yaNotificado = Db::valor(
+            'SELECT notificado_en FROM sm_cupones
+              WHERE cliente = :cli AND customer_id = :customer AND voucher_id = :id',
+            ['cli' => Db::cliente(), 'customer' => $customerId, 'id' => $voucherId]
+        );
+
+        if ($yaNotificado !== null) {
+            Log::info('El evento del cupón ya se envió a SalesManago; no se repite', [
+                'voucher' => $voucherId,
+            ]);
+
+            return;
+        }
+
+        $metadata = is_array($voucher['metadata'] ?? null) ? $voucher['metadata'] : [];
+
+        // Posiciones de detail1..detail10 tal como las definía el original
+        // (v2/webhooks/añadir_cupon.php): la plantilla del correo en
+        // SalesManago se apoya en ellas. detail11 es nuevo y lleva el código,
+        // que el original ponía en «value».
+        $detalles = [
+            'detail1'  => self::MARCA_EVENTO,
+            'detail2'  => $datos['campaign']['description'] ?? null,
+            'detail3'  => $metadata['image_url'] ?? null,
+            'detail4'  => $voucher['expiration_date'] ?? null,
+            'detail5'  => $voucher['start_date'] ?? null,
+            'detail6'  => $descuento['tipo'],
+            'detail7'  => $metadata['category_id'] ?? null,
+            'detail8'  => $metadata['category_name'] ?? null,
+            'detail9'  => $metadata['product_id'] ?? null,
+            'detail10' => $descuento['valor'] ?? $descuento['producto'],
+            'detail11' => $codigo,
+        ];
+
+        $evento = [
+            'date'                => (int) (microtime(true) * 1000),
+            'contactExtEventType' => 'OTHER',
+            // El id del voucher identifica el evento en SalesManago: permite
+            // localizarlo y cruzarlo con sm_cupones.
+            'externalId'          => $voucherId,
+        ];
+
+        if (isset($metadata['description']) && $metadata['description'] !== '') {
+            $evento['description'] = self::texto($metadata['description']);
+        }
+
+        // Los detalles son texto en SalesManago. Los vacíos se omiten en lugar
+        // de enviarse como null.
+        foreach ($detalles as $clave => $valor) {
+            if ($valor !== null && $valor !== '') {
+                $evento[$clave] = self::texto($valor);
+            }
+        }
+
+        ApiSalesManago::anadirEventoExterno($email, $evento);
+
+        Db::ejecutar(
+            'UPDATE sm_cupones SET notificado_en = now(), actualizado_en = now()
+              WHERE cliente = :cli AND customer_id = :customer AND voucher_id = :id',
+            ['cli' => Db::cliente(), 'customer' => $customerId, 'id' => $voucherId]
         );
     }
 
