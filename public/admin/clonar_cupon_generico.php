@@ -192,12 +192,15 @@ function pagina(int $codigo, array $formulario = [], ?string $error = null, ?str
     $aviso = '';
 
     if ($error !== null) {
-        $aviso = '<p class="error">' . $e($error) . '</p>';
+        $aviso = '<div class="aviso aviso-error" role="alert"><strong>No se ha creado el cupón.</strong> '
+            . $e($error) . '</div>';
     }
 
     if ($exito !== null) {
-        $aviso = '<div class="exito"><p>Cupón creado. URL para el webhook de SalesManago:</p>'
-            . '<p><input type="text" readonly value="' . $e($exito) . '" onclick="this.select()"></p></div>';
+        $aviso = '<div class="aviso aviso-ok" role="status">'
+            . '<strong>Cupón creado.</strong> Usa esta URL en el webhook de la regla de automatización de SalesManago:'
+            . '<div class="url"><input type="text" id="url" readonly value="' . $e($exito) . '">'
+            . '<button type="button" class="boton boton-secundario" data-copiar="url">Copiar</button></div></div>';
     }
 
     echo <<<HTML
@@ -206,38 +209,202 @@ function pagina(int $codigo, array $formulario = [], ?string $error = null, ?str
         <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <meta name="robots" content="noindex">
-        <title>Nuevo cupón genérico</title>
+        <meta name="robots" content="noindex, nofollow">
+        <title>Nuevo cupón genérico · EMRED</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Lato:wght@900&family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
         <style>
-          body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #222; }
-          label { display: block; margin-top: 1rem; font-weight: 600; }
-          input[type=text], input[type=password], textarea { width: 100%; box-sizing: border-box; padding: .5rem; font: inherit; }
-          textarea { height: 22rem; font-family: ui-monospace, monospace; font-size: .85rem; }
-          .check { font-weight: normal; }
-          button { margin-top: 1.2rem; padding: .6rem 1.2rem; font: inherit; cursor: pointer; }
-          .error { background: #fde8e8; border: 1px solid #e0a0a0; padding: .7rem; }
-          .exito { background: #e6f6ea; border: 1px solid #9fd0ab; padding: .7rem; }
-          small { color: #666; }
+          /* Colores y tipografías de www.emred.com */
+          :root {
+            --rojo: #fc200d;
+            --rojo-oscuro: #d81a09;
+            --texto: #383737;
+            --texto-suave: #555353;
+            --negro: #1b1c20;
+            --fondo: #f6f6f6;
+            --borde: #e2e2e2;
+            --blanco: #ffffff;
+            --ok: #1e7b3c;
+            --ok-fondo: #eaf6ee;
+            --error-fondo: #fff0ee;
+          }
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            background: var(--fondo);
+            color: var(--texto);
+            font: 400 15px/1.6 Montserrat, Arial, Helvetica, sans-serif;
+          }
+          .cabecera { background: var(--blanco); border-bottom: 1px solid var(--borde); }
+          .cabecera-interior, main, .pie { max-width: 820px; margin: 0 auto; padding: 0 24px; }
+          .cabecera-interior { display: flex; align-items: center; justify-content: space-between; height: 72px; }
+          .logo { font: 900 30px/1 Lato, sans-serif; letter-spacing: -0.5px; color: var(--negro); }
+          .logo span { color: var(--rojo); }
+          .etiqueta { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--texto-suave); }
+          main { padding-top: 40px; padding-bottom: 32px; }
+          h1 { font: 900 34px/1.15 Lato, sans-serif; color: var(--negro); margin: 0 0 8px; }
+          h1::after { content: ""; display: block; width: 48px; height: 4px; background: var(--rojo); margin-top: 14px; }
+          .intro { margin: 0 0 28px; color: var(--texto-suave); max-width: 640px; }
+          .tarjeta {
+            background: var(--blanco);
+            border-radius: 10px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, .06), 0 8px 24px rgba(0, 0, 0, .05);
+            padding: 32px;
+          }
+          .campo + .campo { margin-top: 24px; }
+          label { display: block; font-weight: 600; color: var(--negro); margin-bottom: 6px; }
+          .ayuda { display: block; font-size: 13px; color: var(--texto-suave); margin-top: 6px; }
+          .ayuda code { background: var(--fondo); padding: 1px 5px; border-radius: 4px; }
+          input[type=text], input[type=password], textarea {
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid var(--borde);
+            border-radius: 6px;
+            background: var(--blanco);
+            color: var(--texto);
+            font: inherit;
+            transition: border-color .15s, box-shadow .15s;
+          }
+          input:focus, textarea:focus { outline: none; border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(252, 32, 13, .15); }
+          .prefijo { display: flex; align-items: stretch; }
+          .prefijo span {
+            display: flex; align-items: center; padding: 0 12px;
+            background: var(--fondo); border: 1px solid var(--borde); border-right: 0;
+            border-radius: 6px 0 0 6px; font-size: 13px; color: var(--texto-suave); white-space: nowrap;
+          }
+          .prefijo input { border-radius: 0 6px 6px 0; }
+          textarea { min-height: 340px; resize: vertical; font: 13px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+          .barra-json { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 8px; }
+          .estado-json { font-size: 13px; color: var(--texto-suave); }
+          .estado-json.mal { color: var(--rojo-oscuro); }
+          .estado-json.bien { color: var(--ok); }
+          .casilla { display: flex; gap: 10px; align-items: flex-start; font-weight: 500; color: var(--texto); cursor: pointer; margin: 0; }
+          .casilla input { margin-top: 5px; accent-color: var(--rojo); }
+          .separador { border: 0; border-top: 1px solid var(--borde); margin: 28px 0; }
+          .acciones { display: flex; justify-content: flex-end; margin-top: 28px; }
+          .boton {
+            display: inline-block;
+            padding: 12px 24px;
+            border: 0;
+            border-radius: 6px;
+            background: var(--rojo);
+            color: var(--blanco);
+            font: 600 15px/1.2 Montserrat, sans-serif;
+            cursor: pointer;
+            transition: background .15s;
+          }
+          .boton:hover { background: var(--rojo-oscuro); }
+          .boton:focus-visible { outline: 3px solid rgba(252, 32, 13, .35); outline-offset: 2px; }
+          .boton-secundario { background: var(--blanco); color: var(--negro); border: 1px solid var(--borde); padding: 8px 14px; font-size: 13px; white-space: nowrap; }
+          .boton-secundario:hover { background: var(--fondo); }
+          .aviso { border-radius: 8px; padding: 16px 18px; margin-bottom: 24px; border-left: 4px solid; }
+          .aviso-error { background: var(--error-fondo); border-color: var(--rojo); }
+          .aviso-ok { background: var(--ok-fondo); border-color: var(--ok); }
+          .url { display: flex; gap: 8px; margin-top: 10px; }
+          .url input { font: 13px ui-monospace, SFMono-Regular, Consolas, monospace; }
+          .pie { font-size: 12px; color: var(--texto-suave); padding-bottom: 32px; }
+          @media (max-width: 600px) {
+            .tarjeta { padding: 20px; }
+            h1 { font-size: 27px; }
+            .etiqueta, .prefijo span { display: none; }
+            .prefijo input { border-radius: 6px; }
+            .url, .barra-json { flex-direction: column; align-items: stretch; }
+          }
         </style>
         </head>
         <body>
-        <h1>Nuevo cupón genérico</h1>
-        {$aviso}
-        <form method="post" autocomplete="off">
-          <label for="nombre">Nombre del archivo</label>
-          <input type="text" id="nombre" name="nombre" value="{$nombre}" required pattern="[a-z0-9_\-]{1,60}" placeholder="navidad26">
-          <small>Minúsculas, números, «_» y «-». Será parte de la URL.</small>
+        <header class="cabecera">
+          <div class="cabecera-interior">
+            <span class="logo">EMRED<span>.</span></span>
+            <span class="etiqueta">Loyalty · SalesManago</span>
+          </div>
+        </header>
 
-          <label for="configuracion">Configuración del cupón (JSON de Voucherify)</label>
-          <textarea id="configuracion" name="configuracion" required placeholder='{"voucher": {...}, "campaign": {...}}'>{$configuracion}</textarea>
+        <main>
+          <h1>Nuevo cupón genérico</h1>
+          <p class="intro">Crea el webhook de un cupón genérico a partir de su configuración en Voucherify.
+            Al terminar obtendrás la URL que debes poner en la regla de automatización de SalesManago.</p>
 
-          <label class="check"><input type="checkbox" name="sobrescribir" value="1"{$marcado}> Sobrescribir si ya existe</label>
+          {$aviso}
 
-          <label for="secreto">Secreto</label>
-          <input type="password" id="secreto" name="secreto" required>
+          <form method="post" autocomplete="off" class="tarjeta">
+            <div class="campo">
+              <label for="nombre">Nombre del archivo</label>
+              <div class="prefijo">
+                <span>/webhooks/cupones_genericos/</span>
+                <input type="text" id="nombre" name="nombre" value="{$nombre}" required
+                       pattern="[a-z0-9_\-]{1,60}" maxlength="60" placeholder="navidad26">
+              </div>
+              <span class="ayuda">Minúsculas, números, <code>_</code> y <code>-</code>. Forma parte de la URL; sin <code>.php</code>.</span>
+            </div>
 
-          <button type="submit">Crear cupón</button>
-        </form>
+            <div class="campo">
+              <label for="configuracion">Configuración del cupón</label>
+              <textarea id="configuracion" name="configuracion" required spellcheck="false"
+                        placeholder='{"voucher": {...}, "campaign": {...}}'>{$configuracion}</textarea>
+              <div class="barra-json">
+                <span class="estado-json" id="estado-json">JSON del cupón tal como lo da Voucherify.</span>
+                <button type="button" class="boton boton-secundario" id="formatear">Validar y formatear</button>
+              </div>
+            </div>
+
+            <div class="campo">
+              <label class="casilla"><input type="checkbox" name="sobrescribir" value="1"{$marcado}>
+                <span>Sobrescribir si ya existe un cupón con ese nombre</span></label>
+            </div>
+
+            <hr class="separador">
+
+            <div class="campo">
+              <label for="secreto">Secreto de acceso</label>
+              <input type="password" id="secreto" name="secreto" required>
+              <span class="ayuda">El valor de <code>CUPONES_GENERICOS_SECRETO</code> del servidor.</span>
+            </div>
+
+            <div class="acciones">
+              <button type="submit" class="boton">Crear cupón</button>
+            </div>
+          </form>
+        </main>
+
+        <footer class="pie">EMRED · Herramienta interna. No compartas esta página ni su secreto.</footer>
+
+        <script>
+          // Solo comodidad: el servidor vuelve a validar todo.
+          (function () {
+            var area = document.getElementById('configuracion');
+            var estado = document.getElementById('estado-json');
+
+            document.getElementById('formatear').addEventListener('click', function () {
+              try {
+                var datos = JSON.parse(area.value);
+                area.value = JSON.stringify(datos, null, 2);
+                var v = datos && datos.voucher;
+                if (!v || !v.id || !v.code) {
+                  estado.textContent = 'JSON válido, pero falta voucher.id o voucher.code.';
+                  estado.className = 'estado-json mal';
+                } else {
+                  estado.textContent = 'JSON válido · código ' + v.code;
+                  estado.className = 'estado-json bien';
+                }
+              } catch (e) {
+                estado.textContent = 'JSON no válido: ' + e.message;
+                estado.className = 'estado-json mal';
+              }
+            });
+
+            document.querySelectorAll('[data-copiar]').forEach(function (boton) {
+              boton.addEventListener('click', function () {
+                var campo = document.getElementById(boton.getAttribute('data-copiar'));
+                campo.select();
+                (navigator.clipboard ? navigator.clipboard.writeText(campo.value) : Promise.reject())
+                  .catch(function () { document.execCommand('copy'); })
+                  .finally(function () { boton.textContent = 'Copiada'; });
+              });
+            });
+          })();
+        </script>
         </body>
         </html>
         HTML;
