@@ -1,0 +1,5 @@
+# Los cupones que genera admin/clonar_cupon_generico.php viven solo en el
+# servidor: son datos de cada cliente, no código. Solo la plantilla va al repo.
+*.php
+!verano26.php
+.cupon-*
