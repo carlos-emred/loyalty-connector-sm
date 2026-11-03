@@ -36,6 +36,25 @@ Regla común a todo el proyecto:
 - `redeemed_quantity` sale siempre del payload de Voucherify y nunca retrocede (`GREATEST`). Excepción: en los cupones genéricos el contador del payload es el de todos los clientes, así que `ManejadorCuponConsumido` suma uno por canje del cliente y no toca `quantity`.
 - Una fila por cliente y cupón: la clave de `sm_cupones` es (`cliente`, `customer_id`, `voucher_id`). Los genéricos (`generico = true`) comparten `voucher_id` y código entre todos los clientes que los tienen. Lo comparten `ManejadorCuponAsignado` y `ManejadorCuponGenerico` a través de `RegistroCupon`.
 - `sm_cupones` no tiene columna `metadata`: los datos útiles están en columnas propias (`descripcion`, `image_url`, `product_id`, `category_id`, `category_name`, `solo_uno`, `minimo_compra`).
+
+## Metadata de los cupones
+
+Campos de `voucher.metadata` de Voucherify que lee el proyecto (`RegistroCupon`, `ManejadorCuponAsignado`). Cualquier otro se ignora; no hace falta ponerlo en las campañas.
+
+| Campo | Para qué |
+|---|---|
+| `free_shipping` | `true` en un cupón `UNIT` = envío gratis (tipo `SHIPPING`). Sin él, un `UNIT` es un producto regalado. Sustituye a `discount_type`, que ya no se lee |
+| `description` | Descripción del cupón (`descripcion`) y `description` del evento de SalesManago |
+| `image_url` | Imagen del cupón; `detail3` del evento |
+| `minimum_purchase_quantity` | Compra mínima en euros (`minimo_compra`) |
+| `only_one` | Un solo uso (`solo_uno`); la web lo recibe como `only_one` |
+| `product_id` | Producto de Shopify al que se limita; `detail9` del evento |
+| `category_id` | Colección de Shopify a la que se limita; `detail7` del evento |
+| `category_name` | Nombre de esa colección; `detail8` del evento |
+
+No se leen: `discount_type`, `discount_value` (el valor sale de `discount.percent_off` o `discount.amount_off`) ni `generic_coupon` (el código es `voucher.code`).
+
+`crear_cupon.php` tiene su propio `metadata` en la petición (`product_id`, `category_id`, `only_one`, `minimum_purchase_quantity`); el envío gratis va ahí en `type: SHIPPING`, no en metadata.
 - `crear_cupon.php` no lleva `quantity` a Shopify: la validez la decide Voucherify (ver Shopify).
 
 ## Endpoints públicos

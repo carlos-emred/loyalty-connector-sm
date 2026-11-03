@@ -30,9 +30,14 @@ final class RegistroCupon
      *   PERCENT  → porcentaje entero.
      *   AMOUNT   → céntimos, tal como los da Voucherify.
      *   SHIPPING → 100. Voucherify no tiene ese tipo: llega como UNIT con
-     *              metadata.discount_type = SHIPPING.
+     *              metadata.free_shipping = true.
      *   UNIT     → producto regalado. Sin valor numérico; va el nombre del
      *              producto.
+     *
+     * metadata.free_shipping sustituye a metadata.discount_type, que repetía
+     * discount.type y solo servía para distinguir el envío gratis. Un cupón
+     * que aún lleve discount_type = SHIPPING y no free_shipping se toma como
+     * producto regalado (UNIT).
      *
      * @param array<string,mixed> $voucher
      * @return array{tipo: string, valor: ?int, producto: ?string}|null null si el tipo es desconocido
@@ -41,11 +46,13 @@ final class RegistroCupon
     {
         $descuento = is_array($voucher['discount'] ?? null) ? $voucher['discount'] : [];
         $metadata = is_array($voucher['metadata'] ?? null) ? $voucher['metadata'] : [];
+        // Voucherify puede enviarlo como booleano o como texto ("true").
+        $envioGratis = filter_var($metadata['free_shipping'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
         return match ($descuento['type'] ?? null) {
             'PERCENT' => ['tipo' => 'PERCENT', 'valor' => (int) ($descuento['percent_off'] ?? 0), 'producto' => null],
             'AMOUNT'  => ['tipo' => 'AMOUNT', 'valor' => (int) ($descuento['amount_off'] ?? 0), 'producto' => null],
-            'UNIT'    => ($metadata['discount_type'] ?? null) === 'SHIPPING'
+            'UNIT'    => $envioGratis
                 ? ['tipo' => 'SHIPPING', 'valor' => 100, 'producto' => null]
                 : [
                     'tipo'     => 'UNIT',

@@ -17,7 +17,8 @@ declare(strict_types=1);
  * - La configuración es el JSON del cupón tal como lo da Voucherify:
  *   {"voucher": {...}, "campaign": {...}}. Se usan voucher.id, voucher.code,
  *   voucher.discount, voucher.metadata, voucher.redemption, las fechas y
- *   campaign.name/description.
+ *   campaign.name/description. Los campos de metadata que se leen están en
+ *   CLAUDE.md («Metadata de los cupones»); el resto se ignora.
  * - Va como texto (nowdoc) y no como array de PHP a propósito: lo que suba el
  *   cliente nunca se ejecuta como código. Lo único que no puede contener es
  *   una línea que sea exactamente «CONFIGURACION;».
@@ -71,9 +72,6 @@ RecepcionCuponGenerico::atender(<<<'CONFIGURACION'
     "metadata": {
       "image_url": null,
       "description": "Celebra el verano con un 20% de descuento en todas tus compras. Utiliza el código SUMMER20 al finalizar tu pedido. Promoción válida del 1 de julio al 31 de agosto de 2026 para pedidos superiores a 30€",
-      "discount_type": "PERCENT",
-      "discount_value": "20",
-      "generic_coupon": "VERANO26",
       "minimum_purchase_quantity": "30"
     },
     "categories": [],
@@ -129,9 +127,6 @@ RecepcionCuponGenerico::atender(<<<'CONFIGURACION'
     "metadata": {
       "image_url": null,
       "description": "Celebra el verano con un 20% de descuento en todas tus compras. Utiliza el código SUMMER20 al finalizar tu pedido. Promoción válida del 1 de julio al 31 de agosto de 2026 para pedidos superiores a 30€",
-      "discount_type": "PERCENT",
-      "discount_value": "20",
-      "generic_coupon": "VERANO26",
       "minimum_purchase_quantity": "30"
     },
     "auto_join": false,
