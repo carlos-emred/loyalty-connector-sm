@@ -36,6 +36,15 @@ use SalesManago\Log;
  *
  * Solo si el payload no trae el contador se suma uno, como el original.
  *
+ * CUPONES GENÉRICOS
+ * -----------------
+ * En un cupón genérico (sm_cupones.generico, ver ManejadorCuponGenerico)
+ * todos los clientes comparten el voucher, así que redeemed_quantity y
+ * quantity del payload son los de todos juntos. En su fila se suma uno por
+ * canje del cliente y quantity no se toca. Si el evento se reprocesara tras un
+ * fallo, ese uso se contaría dos veces: la cola descarta los reenvíos de
+ * Voucherify (event.id), así que solo pasa si el worker muere a mitad.
+ *
  * SIN EXCEPCIONES
  * ---------------
  * Un payload sin cupón o un cupón que no está en sm_cupones (porque no llegó su
@@ -142,7 +151,8 @@ final class ManejadorCuponConsumido implements ManejadorEvento
         $parametros = ['cli' => Db::cliente(), 'customer' => $customerId];
 
         if (isset($redencion['redeemed_quantity']) && is_numeric($redencion['redeemed_quantity'])) {
-            $set = 'redeemed_quantity = GREATEST(redeemed_quantity, :usados)';
+            $set = 'redeemed_quantity = CASE WHEN generico THEN redeemed_quantity + 1
+                                             ELSE GREATEST(redeemed_quantity, :usados) END';
             $parametros['usados'] = (int) $redencion['redeemed_quantity'];
         } else {
             Log::warning('Canje sin redeemed_quantity en el payload; se suma un uso', ['evento' => $idEvento]);
@@ -152,7 +162,7 @@ final class ManejadorCuponConsumido implements ManejadorEvento
         // quantity solo si el payload la trae: null en Voucherify es «usos
         // ilimitados», que no es lo mismo que no saberlo.
         if (array_key_exists('quantity', $redencion)) {
-            $set .= ', quantity = :quantity';
+            $set .= ', quantity = CASE WHEN generico THEN quantity ELSE :quantity END';
             $parametros['quantity'] = is_numeric($redencion['quantity']) ? (int) $redencion['quantity'] : null;
         }
 

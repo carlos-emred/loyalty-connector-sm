@@ -144,6 +144,11 @@ CREATE INDEX IF NOT EXISTS ix_sm_eventos_fallidos
 -- notificado_en evita mandar dos veces el correo: se escribe justo después de
 -- lanzar el evento externo en SalesManago y se consulta antes.
 --
+-- Una fila por cliente y cupón: (cliente, customer_id, voucher_id). Un cupón
+-- propio tiene un solo titular; uno genérico (generico = true, asignado desde
+-- SalesManago por webhooks/cupones_genericos/*.php) comparte voucher_id y
+-- código con todos los clientes que lo tienen.
+--
 -- USOS Y ESTADO
 -- quantity es el número de veces que se puede consumir el cupón (NULL en
 -- Voucherify: ilimitado) y redeemed_quantity las que ya se ha consumido.
@@ -161,10 +166,11 @@ CREATE INDEX IF NOT EXISTS ix_sm_eventos_fallidos
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS sm_cupones (
-    voucher_id              text        PRIMARY KEY,
+    voucher_id              text        NOT NULL,
     cliente                 text        NOT NULL,
     customer_id             text        NOT NULL,
     codigo                  text        NOT NULL,
+    generico                boolean     NOT NULL DEFAULT false,
     campaign_id             text,
     campaign_name           text,
 
@@ -194,13 +200,15 @@ CREATE TABLE IF NOT EXISTS sm_cupones (
     creado_en               timestamptz NOT NULL DEFAULT now(),
     actualizado_en          timestamptz NOT NULL DEFAULT now(),
 
-    CONSTRAINT uq_sm_cupones_codigo UNIQUE (cliente, codigo),
+    CONSTRAINT sm_cupones_pkey PRIMARY KEY (cliente, customer_id, voucher_id),
+    CONSTRAINT uq_sm_cupones_codigo UNIQUE (cliente, customer_id, codigo),
     CONSTRAINT ck_sm_cupones_tipo CHECK (tipo IN ('AMOUNT', 'PERCENT', 'SHIPPING', 'UNIT')),
     CONSTRAINT ck_sm_cupones_estado CHECK (estado IN ('disponible', 'canjeado', 'caducado', 'eliminado'))
 );
 
 COMMENT ON TABLE  sm_cupones IS 'Cupones asignados a cada cliente; sustituye a cupones/*.json';
-COMMENT ON COLUMN sm_cupones.voucher_id IS 'Identificador de Voucherify (v_...); clave principal';
+COMMENT ON COLUMN sm_cupones.voucher_id IS 'Identificador de Voucherify (v_...); compartido por todos los clientes en los genéricos';
+COMMENT ON COLUMN sm_cupones.generico IS 'Cupón genérico (mismo código para todos) asignado desde SalesManago; una fila por cliente';
 COMMENT ON COLUMN sm_cupones.customer_id IS 'Identificador del cliente en Voucherify (cust_...)';
 COMMENT ON COLUMN sm_cupones.valor IS 'Céntimos si AMOUNT, porcentaje si PERCENT, 100 si SHIPPING, NULL si UNIT';
 COMMENT ON COLUMN sm_cupones.producto IS 'Nombre del producto regalado si UNIT';
@@ -213,6 +221,9 @@ COMMENT ON COLUMN sm_cupones.notificado_en IS 'Momento en que se lanzó el event
 
 CREATE INDEX IF NOT EXISTS ix_sm_cupones_customer
     ON sm_cupones (cliente, customer_id);
+
+CREATE INDEX IF NOT EXISTS ix_sm_cupones_voucher
+    ON sm_cupones (voucher_id);
 
 
 -- ---------------------------------------------------------------------------
